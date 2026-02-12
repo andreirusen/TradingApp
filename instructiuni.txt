@@ -1,0 +1,45 @@
+1. Instaleaza Python https://www.python.org/downloads/
+*FOARTE IMPORTANT: În timpul instalării, bifează căsuța "Add Python to PATH". Dacă uiți acest pas, Windows nu va recunoaște comenzile python sau pip în terminal.
+
+2. Deschide Folderul în VSC
+Pune fișierul app.py într-un folder (de exemplu, pe Desktop în folderul ProiectTrading).
+Deschide VSC, mergi la File > Open Folder... și selectează folderul respectiv.
+
+3. Verifică Extensia de Python
+Asigură-te că ai extensia Python instalată în VSC:
+Mergi la iconița de Extensions din stânga (pătrățelele acelea mici).
+Caută "Python" și instalează extensia oficială de la Microsoft.
+
+3. Deschide Terminalul Integrat
+În loc să folosești PowerShell separat, folosește terminalul din VSC:
+Apasă Ctrl + J (sau mergi sus la Terminal > New Terminal).
+Vei vedea terminalul deschis direct în folderul proiectului tău.
+
+
+Pentru Windows:
+
+4. Instalarea dependințelor Python
+În terminalul de jos, scrie următoarea comandă și apasă Enter:
+PowerShell: "python -m pip install streamlit pandas plotly openpyxl"
+
+**Dacă primești aceeași eroare și pentru python, încearcă varianta „scurtă” pentru Windows:**
+PowerShell: "py -m pip install streamlit pandas plotly openpyxl"
+
+5. Rularea Aplicației
+După ce s-au instalat toate bibliotecile, scrie în același terminal:
+PowerShell: "python -m streamlit run app.py"
+
+6. Pentru a oprirea aplicației:
+apasă Ctrl + C în terminalul din VSC. 
+**Când vrei să o pornești din nou, repeți comanda " python -m streamlit run app.py " **
+
+
+
+Pentru MAC:
+
+// Deschide Terminalul (este in dreapta sus de tot)
+// Foloseste urmatorul cod pentru pornire ->              python3 -m streamlit run app.py
+// Pentru oprile foloseste ->                             WIN + C (sau control C daca ai MAC)
+// Daca nu merge, foloseste asa : 
+// python3 -m pip install --upgrade pip
+// python3 -m pip install openpyxl
