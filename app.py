@@ -242,7 +242,7 @@ def render_full_analysis(df, title_prefix, selected_months_list):
     with col_p2: st.table(df_loss_prob)
 
     st.markdown("---")
-    st.subheader("⏰ Analiză pe Ore")
+    st.subheader("⏰ Analiză pe Ore (INTRARE)")
     hour_stats = df.groupby('Hour').agg(
         Profit=('Net P&L USD', 'sum'), W=('Result', lambda x: (x == 'Win').sum()), L=('Result', lambda x: (x == 'Loss').sum()),
         Total_Trades=('Result', 'count'), WR=('Result', lambda x: (len(x[x=='Win'])/len(x))*100 if len(x)>0 else 0)
@@ -256,18 +256,49 @@ def render_full_analysis(df, title_prefix, selected_months_list):
 
     top_col, bottom_col = st.columns(2)
     with top_col:
-        st.markdown("#### 🟢 Top 5 Winning Hours (Win Rate)")
+        st.markdown("#### 🟢 Top 5 Winning Hours (Intrare)")
         top_5_wr = hour_stats[hour_stats['Total_Trades'] > 0].sort_values(by=['WR', 'Profit'], ascending=False).head(5)
         for _, row in top_5_wr.iterrows():
             st.markdown(f"""<div class="top-box">Ora <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br> 
                         <small>Profit: ${row['Profit']:,.2f} | Scor: {int(row['W'])}W - {int(row['L'])}L</small></div>""", unsafe_allow_html=True)
 
     with bottom_col:
-        st.markdown("#### 🔴 Top 5 Losing Hours (Win Rate)")
+        st.markdown("#### 🔴 Top 5 Losing Hours (Intrare)")
         bottom_5_wr = hour_stats[hour_stats['Total_Trades'] > 0].sort_values(by=['WR', 'Profit'], ascending=True).head(5)
         for _, row in bottom_5_wr.iterrows():
             st.markdown(f"""<div class="bottom-box">Ora <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br> 
                         <small>Profit: ${row['Profit']:,.2f} | Scor: {int(row['W'])}W - {int(row['L'])}L</small></div>""", unsafe_allow_html=True)
+
+    # ---------------- NOUĂ SECȚIUNE ORE IEȘIRE ----------------
+    st.markdown("---")
+    st.subheader("🚪 Analiză pe Ore (IEȘIRE)")
+    exit_hour_stats = df.dropna(subset=['Exit_Hour']).groupby('Exit_Hour').agg(
+        Profit=('Net P&L USD', 'sum'), W=('Result', lambda x: (x == 'Win').sum()), L=('Result', lambda x: (x == 'Loss').sum()),
+        Total_Trades=('Result', 'count'), WR=('Result', lambda x: (len(x[x=='Win'])/len(x))*100 if len(x)>0 else 0)
+    ).reset_index()
+    exit_hour_stats['Time Label'] = exit_hour_stats['Exit_Hour'].apply(lambda x: f"{int(x):02d}:00")
+    
+    fig_exit_hour = px.bar(exit_hour_stats, x='Time Label', y='Profit', 
+                    text=exit_hour_stats.apply(lambda r: f"${r['Profit']:,.0f}<br>{r['WR']:.0f}% ({int(r['W'])}W/{int(r['L'])}L)", axis=1),
+                    template="plotly_dark", color='Profit', color_continuous_scale='RdYlGn')
+    fig_exit_hour.update_traces(textposition='outside')
+    st.plotly_chart(fig_exit_hour, use_container_width=True)
+
+    top_col_ex, bottom_col_ex = st.columns(2)
+    with top_col_ex:
+        st.markdown("#### 🟢 Top 5 Winning Hours (Ieșire)")
+        top_5_wr_ex = exit_hour_stats[exit_hour_stats['Total_Trades'] > 0].sort_values(by=['WR', 'Profit'], ascending=False).head(5)
+        for _, row in top_5_wr_ex.iterrows():
+            st.markdown(f"""<div class="top-box">Ora <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br> 
+                        <small>Profit: ${row['Profit']:,.2f} | Scor: {int(row['W'])}W - {int(row['L'])}L</small></div>""", unsafe_allow_html=True)
+
+    with bottom_col_ex:
+        st.markdown("#### 🔴 Top 5 Losing Hours (Ieșire)")
+        bottom_5_wr_ex = exit_hour_stats[exit_hour_stats['Total_Trades'] > 0].sort_values(by=['WR', 'Profit'], ascending=True).head(5)
+        for _, row in bottom_5_wr_ex.iterrows():
+            st.markdown(f"""<div class="bottom-box">Ora <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br> 
+                        <small>Profit: ${row['Profit']:,.2f} | Scor: {int(row['W'])}W - {int(row['L'])}L</small></div>""", unsafe_allow_html=True)
+    # ---------------------------------------------------------
 
     st.markdown("---")
     st.subheader("📊 Performanță pe Zile")
@@ -345,6 +376,7 @@ if uploaded_file:
         
         df_combined['Direction'] = df_combined['Type_y'].apply(get_direction)
         df_combined['Hour'] = df_combined['Entry Time'].dt.hour
+        df_combined['Exit_Hour'] = df_combined['Exit Time'].dt.hour # <---- ADĂUGAT: Extragerea orei de ieșire
         df_combined['Year'] = df_combined['Entry Time'].dt.year
         df_combined['Month'] = df_combined['Entry Time'].dt.month_name()
         df_combined['Day'] = df_combined['Entry Time'].dt.day_name()
