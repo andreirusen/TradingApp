@@ -376,7 +376,7 @@ if uploaded_file:
         
         df_combined['Direction'] = df_combined['Type_y'].apply(get_direction)
         df_combined['Hour'] = df_combined['Entry Time'].dt.hour
-        df_combined['Exit_Hour'] = df_combined['Exit Time'].dt.hour # <---- ADĂUGAT: Extragerea orei de ieșire
+        df_combined['Exit_Hour'] = df_combined['Exit Time'].dt.hour 
         df_combined['Year'] = df_combined['Entry Time'].dt.year
         df_combined['Month'] = df_combined['Entry Time'].dt.month_name()
         df_combined['Day'] = df_combined['Entry Time'].dt.day_name()
@@ -388,7 +388,8 @@ if uploaded_file:
         df_combined['Session'] = df_combined['Entry Time'].apply(get_session)
 
         st.markdown("### 🔍 Filtrare Date")
-        c1, c2, c3, c4 = st.columns(4)
+        # AM MODIFICAT AICI: Din 4 coloane în 5 coloane
+        c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
             all_years = sorted(df_combined['Year'].unique())
             selected_years = st.multiselect("Anii:", all_years, default=all_years)
@@ -403,12 +404,18 @@ if uploaded_file:
         with c4:
             all_dirs = sorted(df_combined['Direction'].unique())
             selected_dirs = st.multiselect("Direcție (Long/Short):", all_dirs, default=all_dirs)
+        # FILTRUL NOU ADAUGAT
+        with c5:
+            all_results = ["Win", "Loss"]
+            selected_results = st.multiselect("Rezultat (Win/Loss):", all_results, default=all_results)
 
+        # ACTUALIZARE LOGICĂ FILTRARE FINALĂ
         df_final = df_combined[
             (df_combined['Year'].isin(selected_years)) & 
             (df_combined['Month'].isin(selected_months)) &
             (df_combined['Day'].isin(selected_days)) &
-            (df_combined['Direction'].isin(selected_dirs)) 
+            (df_combined['Direction'].isin(selected_dirs)) &
+            (df_combined['Result'].isin(selected_results))
         ]
 
         tab_global, tab_s1, tab_s2 = st.tabs(["🌍 Global", "🌅 Sesiunea 1", "🌆 Sesiunea 2"])
