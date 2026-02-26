@@ -168,11 +168,36 @@ def render_full_analysis(df, title_prefix, selected_months_list):
     neg_loss = abs(df[df['Net P&L USD'] < 0]['Net P&L USD'].sum())
     pf = pos_profit / neg_loss if neg_loss > 0 else pos_profit
 
+    # Calcul Max Drawdown General (1 Cont unic)
+    df_dd = df.sort_values('Entry Time').copy()
+    df_dd['Cumulative'] = df_dd['Net P&L USD'].cumsum()
+    df_dd['Peak'] = df_dd['Cumulative'].cummax()
+    df_dd['Drawdown'] = df_dd['Cumulative'] - df_dd['Peak']
+    gen_max_dd = df_dd['Drawdown'].min()
+
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Profit Net Brut", f"${total_pnl:,.2f}")
-    m2.metric("Profit Factor", f"{pf:.2f}")
-    m3.metric("Win Rate General", f"{wr:.1f}%")
-    m4.metric("Total Trades", f"{len(df)} ({wins_count}W/{losses_count}L)")
+    m2.metric("Max Drawdown (1 Cont)", f"${gen_max_dd:,.2f}")
+    m3.metric("Profit Factor", f"{pf:.2f}")
+    m4.metric("Win Rate General", f"{wr:.1f}%")
+
+    c_trades, c_dirs = st.columns([1, 2])
+    with c_trades:
+        st.metric("Total Trades", f"{len(df)} ({wins_count}W/{losses_count}L)")
+    with c_dirs:
+        longs = df[df['Direction'] == 'Long']
+        shorts = df[df['Direction'] == 'Short']
+        l_w = len(longs[longs['Net P&L USD'] > 0])
+        l_l = len(longs[longs['Net P&L USD'] < 0])
+        s_w = len(shorts[shorts['Net P&L USD'] > 0])
+        s_l = len(shorts[shorts['Net P&L USD'] < 0])
+        
+        st.markdown(f"""
+        <div style="display: flex; gap: 30px; background-color: #161b22; border-radius: 10px; padding: 15px; border: 1px solid #30363d; height: 100%; align-items: center;">
+            <div><span style="font-size:18px;">🔼</span> <strong>Long:</strong> {len(longs)} <span style="color:#aaa; font-size:14px;">({l_w}W / {l_l}L)</span></div>
+            <div><span style="font-size:18px;">🔽</span> <strong>Short:</strong> {len(shorts)} <span style="color:#aaa; font-size:14px;">({s_w}W / {s_l}L)</span></div>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("---")
     st.subheader(f"💰 Analiză Cicluri Payout — {title_prefix}")
@@ -350,7 +375,11 @@ def render_full_analysis(df, title_prefix, selected_months_list):
 
     st.markdown("---")
     with st.expander(f"📑 Jurnal Detaliat — {title_prefix}"):
-        st.dataframe(df[['Entry Time', 'Signal', 'Net P&L USD', 'Result', 'Trade #']].sort_values('Entry Time', ascending=False), use_container_width=True)
+        # AICI am adăugat coloana 'Direction'
+        cols_to_show = ['Entry Time', 'Direction', 'Signal', 'Net P&L USD', 'Result', 'Trade #']
+        # Ne asigurăm că dacă 'Signal' lipsește din datele brute să nu dea eroare
+        existing_cols = [col for col in cols_to_show if col in df.columns]
+        st.dataframe(df[existing_cols].sort_values('Entry Time', ascending=False), use_container_width=True)
 
 # 4. LOGICĂ DATE + FILTRE
 st.title("🏆 TradingView Payout & Strategy")
@@ -388,7 +417,6 @@ if uploaded_file:
         df_combined['Session'] = df_combined['Entry Time'].apply(get_session)
 
         st.markdown("### 🔍 Filtrare Date")
-        # AM MODIFICAT AICI: Din 4 coloane în 5 coloane
         c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
             all_years = sorted(df_combined['Year'].unique())
@@ -404,12 +432,10 @@ if uploaded_file:
         with c4:
             all_dirs = sorted(df_combined['Direction'].unique())
             selected_dirs = st.multiselect("Direcție (Long/Short):", all_dirs, default=all_dirs)
-        # FILTRUL NOU ADAUGAT
         with c5:
             all_results = ["Win", "Loss"]
             selected_results = st.multiselect("Rezultat (Win/Loss):", all_results, default=all_results)
 
-        # ACTUALIZARE LOGICĂ FILTRARE FINALĂ
         df_final = df_combined[
             (df_combined['Year'].isin(selected_years)) & 
             (df_combined['Month'].isin(selected_months)) &
