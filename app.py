@@ -227,24 +227,34 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
     best_trade = df['Net P&L USD'].max()
     worst_trade = df['Net P&L USD'].min()
 
-    # RÂNDUL 1: Profit, PF, Win Rate
+    # RÂNDUL 1: Profit, Max Drawdown, RR
     r1_c1, r1_c2, r1_c3 = st.columns(3)
     with r1_c1:
         st.markdown(f"<div class='stat-card'><div class='stat-label'>Profit Net Brut</div><div class='stat-value' style='color:#00cf8d'>${total_pnl:,.2f}</div></div>", unsafe_allow_html=True)
     with r1_c2:
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Profit Factor</div><div class='stat-value'>{pf:.2f}</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Max Drawdown (1 Cont)</div><div class='stat-value' style='color:#ff4b4b'>${gen_max_dd:,.2f}</div></div>", unsafe_allow_html=True)
     with r1_c3:
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Win Rate General</div><div class='stat-value'>{wr:.1f}%</div></div>", unsafe_allow_html=True)
-
+        rr_color = "#00cf8d" if rr_ratio >= 1 else "#ff4b4b"
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Risk / Reward Ratio</div><div class='stat-value' style='color:{rr_color}'>{rr_ratio:.2f}R</div><div class='stat-sub'>Avg Win / Avg Loss</div></div>", unsafe_allow_html=True)
     st.write("")
 
-    # RÂNDUL 2: Max DD, Total Trades, Trade Direction
+    # RÂNDUL 2: PF, Win Rate, Total Trades
     r2_c1, r2_c2, r2_c3 = st.columns(3)
     with r2_c1:
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Max Drawdown (1 Cont)</div><div class='stat-value' style='color:#ff4b4b'>${gen_max_dd:,.2f}</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Profit Factor</div><div class='stat-value'>{pf:.2f}</div></div>", unsafe_allow_html=True)
     with r2_c2:
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Total Trades</div><div class='stat-value'>{len(df)}</div><div class='stat-sub'>{wins_count}W / {losses_count}L</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Win Rate General</div><div class='stat-value'>{wr:.1f}%</div></div>", unsafe_allow_html=True)
     with r2_c3:
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Total Trades</div><div class='stat-value'>{len(df)}</div><div class='stat-sub'>{wins_count}W / {losses_count}L</div></div>", unsafe_allow_html=True)
+    st.write("")
+
+    # RÂNDUL 3: Avg Win, Avg Loss, R:R Ratio
+    r3_c1, r3_c2, r3_c3 = st.columns(3)
+    with r3_c1:
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg Win</div><div class='stat-value' style='color:#00cf8d'>${avg_win:,.2f}</div></div>", unsafe_allow_html=True)
+    with r3_c2:
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg Loss</div><div class='stat-value' style='color:#ff4b4b'>${avg_loss:,.2f}</div></div>", unsafe_allow_html=True)
+    with r3_c3:
         longs = df[df['Direction'] == 'Long']
         shorts = df[df['Direction'] == 'Short']
         l_w = len(longs[longs['Net P&L USD'] > 0])
@@ -264,18 +274,6 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
             </div>
         </div>
         """, unsafe_allow_html=True)
-
-    st.write("")
-
-    # RÂNDUL 3: Avg Win, Avg Loss, R:R Ratio
-    r3_c1, r3_c2, r3_c3 = st.columns(3)
-    with r3_c1:
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg Win</div><div class='stat-value' style='color:#00cf8d'>${avg_win:,.2f}</div></div>", unsafe_allow_html=True)
-    with r3_c2:
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg Loss</div><div class='stat-value' style='color:#ff4b4b'>${avg_loss:,.2f}</div></div>", unsafe_allow_html=True)
-    with r3_c3:
-        rr_color = "#00cf8d" if rr_ratio >= 1 else "#ff4b4b"
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Risk / Reward Ratio</div><div class='stat-value' style='color:{rr_color}'>{rr_ratio:.2f}R</div><div class='stat-sub'>Avg Win / Avg Loss</div></div>", unsafe_allow_html=True)
 
     st.write("")
 
