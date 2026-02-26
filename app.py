@@ -616,17 +616,17 @@ if uploaded_file:
 
         wins_f = len(df_final[df_final['Result'] == 'Win'])
         losses_f = len(df_final[df_final['Result'] == 'Loss'])
-        with st.expander(f"📋 Toate Tranzacțiile Filtrate — {len(df_final)} trades ({wins_f}W / {losses_f}L)", expanded=False):
-            cols_to_show = ['Entry Time', 'Exit Time', 'Direction', 'Signal', 'Net P&L USD', 'Result', 'Trade #', 'Session', 'Duration_Min']
-            existing_cols = [col for col in cols_to_show if col in df_final.columns]
-            st.dataframe(df_final[existing_cols].sort_values('Entry Time', ascending=False), use_container_width=True)
-            csv_data = df_final[existing_cols].sort_values('Entry Time', ascending=False).to_csv(index=False)
-            st.download_button(
-                label="⬇️ Export CSV",
-                data=csv_data,
-                file_name="trades_filtrate.csv",
-                mime="text/csv"
-            )
+        # with st.expander(f"📋 Toate Tranzacțiile Filtrate — {len(df_final)} trades ({wins_f}W / {losses_f}L)", expanded=False):
+        #     cols_to_show = ['Entry Time', 'Exit Time', 'Direction', 'Signal', 'Net P&L USD', 'Result', 'Trade #', 'Session', 'Duration_Min']
+        #     existing_cols = [col for col in cols_to_show if col in df_final.columns]
+        #     st.dataframe(df_final[existing_cols].sort_values('Entry Time', ascending=False), use_container_width=True)
+        #     csv_data = df_final[existing_cols].sort_values('Entry Time', ascending=False).to_csv(index=False)
+        #     st.download_button(
+        #         label="⬇️ Export CSV",
+        #         data=csv_data,
+        #         file_name="trades_filtrate.csv",
+        #         mime="text/csv"
+        #     )
 
         tab_global, tab_s1, tab_s2 = st.tabs(["🌍 Global", "🌅 Sesiunea 1", "🌆 Sesiunea 2"])
         with tab_global: render_full_analysis(df_final, "Global", [])
