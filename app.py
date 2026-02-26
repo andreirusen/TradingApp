@@ -20,14 +20,13 @@ st.set_page_config(page_title="TradingView Payout & Strategy", layout="wide")
 st.markdown("""
     <style>
     .stApp { background-color: #0e1117; color: white; }
-    
-    /* Stil unitar pentru toate box-urile de statistici */
+
     .stat-card {
         background-color: #161b22;
         border: 1px solid #30363d;
         border-radius: 10px;
         padding: 15px;
-        height: 110px; /* Înălțime fixă pentru aliniere perfectă */
+        height: 110px;
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -54,13 +53,14 @@ st.markdown("""
     div[data-testid="stExpander"] { background-color: #161b22; border: 1px solid #30363d; }
     .top-box { background-color: #0d2111; border-left: 5px solid #00cf8d; padding: 12px; border-radius: 8px; margin-bottom: 10px; border-right: 1px solid #30363d; border-top: 1px solid #30363d; border-bottom: 1px solid #30363d; }
     .bottom-box { background-color: #210d0d; border-left: 5px solid #cf0000; padding: 12px; border-radius: 8px; margin-bottom: 10px; border-right: 1px solid #30363d; border-top: 1px solid #30363d; border-bottom: 1px solid #30363d; }
-    
+
     .day-card { padding: 10px; border-radius: 8px; text-align: center; margin: 2px; border: 1px solid #30363d; }
     .day-win { background-color: #0d2111; border-color: #00cf8d; }
     .day-loss { background-color: #210d0d; border-color: #cf0000; }
     .day-neutral { background-color: #161b22; opacity: 0.5; }
     </style>
     """, unsafe_allow_html=True)
+
 
 # --- FUNCȚIE CALCUL PROBABILITĂȚI ȘIRURI ---
 def get_streak_probabilities(df):
@@ -86,11 +86,30 @@ def get_streak_probabilities(df):
         return pd.DataFrame(data)
     return format_dict(win_streaks, "Win"), format_dict(loss_streaks, "Loss")
 
+
+# --- FUNCȚIE CALCUL MAX STREAK ---
+def get_max_streaks(df):
+    if df.empty: return 0, 0
+    results = df.sort_values('Entry Time')['Result'].tolist()
+    max_win, max_loss = 0, 0
+    curr_win, curr_loss = 0, 0
+    for r in results:
+        if r == 'Win':
+            curr_win += 1
+            curr_loss = 0
+            max_win = max(max_win, curr_win)
+        else:
+            curr_loss += 1
+            curr_win = 0
+            max_loss = max(max_loss, curr_loss)
+    return max_win, max_loss
+
+
 # --- FUNCȚIE SIMULARE FUNDED + TIMELINE PAYOUT ---
 def simulate_payout_timeline(df, num_accounts, payout_days):
     df_sorted = df.sort_values('Entry Time').copy()
     if df_sorted.empty: return 0.0, [], [0.0]*num_accounts
-    
+
     account_balances = [0.0] * num_accounts
     cycle_drawdowns = [0.0] * num_accounts
     payout_cycles = []
@@ -117,52 +136,53 @@ def simulate_payout_timeline(df, num_accounts, payout_days):
         pnl = row['Net P&L USD']
         account_balances[current_acc_idx] += pnl
         trades_count += 1
-        
+
         if account_balances[current_acc_idx] < cycle_drawdowns[current_acc_idx]:
             cycle_drawdowns[current_acc_idx] = account_balances[current_acc_idx]
-        
+
         if row['Result'] == 'Loss' or (row['Result'] == 'Win' and account_balances[current_acc_idx] >= 0):
             current_acc_idx = (current_acc_idx + 1) % num_accounts
 
     total_payout_sum = sum([c['Payout'] for c in payout_cycles])
     return total_payout_sum, payout_cycles, account_balances
 
-# --- NOU: FUNCȚIE RENDER CALENDAR SĂPTĂMÂNAL ---
+
+# --- FUNCȚIE RENDER CALENDAR SĂPTĂMÂNAL ---
 def render_weekly_calendar(df, title_key):
     st.markdown("### 📅 Calendar Profit Săptămânal")
-    
+
     col_sel, col_info = st.columns([1, 3])
     with col_sel:
         ref_date = st.date_input("Caută o săptămână (alege orice zi):", datetime.now().date(), key=f"cal_date_{title_key}")
-    
+
     start_week = ref_date - timedelta(days=ref_date.weekday())
     end_week = start_week + timedelta(days=6)
-    
+
     with col_info:
         st.write(f"**Săptămâna curentă vizualizată:** {start_week.strftime('%d %b %Y')} — {end_week.strftime('%d %b %Y')}")
 
     mask = (df['Entry Time'].dt.date >= start_week) & (df['Entry Time'].dt.date <= end_week)
     df_week = df.loc[mask].copy()
-    
+
     df_week['DateStr'] = df_week['Entry Time'].dt.strftime('%Y-%m-%d')
     daily_stats = df_week.groupby('DateStr').agg(PnL=('Net P&L USD', 'sum'), Count=('Trade #', 'count')).to_dict('index')
 
     cols = st.columns(7)
     days_names = ['Luni', 'Marți', 'Miercuri', 'Joi', 'Vineri', 'Sâmbătă', 'Duminică']
-    
+
     for i in range(7):
         curr_day = start_week + timedelta(days=i)
         curr_day_str = curr_day.strftime('%Y-%m-%d')
-        
+
         with cols[i]:
             st.markdown(f"<div style='text-align:center; font-weight:bold; font-size:14px;'>{days_names[i]}<br><span style='font-size:12px; color:#888'>{curr_day.strftime('%d %b')}</span></div>", unsafe_allow_html=True)
-            
+
             if curr_day_str in daily_stats:
                 pnl = daily_stats[curr_day_str]['PnL']
                 cnt = daily_stats[curr_day_str]['Count']
                 css_class = "day-win" if pnl >= 0 else "day-loss"
                 pnl_fmt = f"+${pnl:,.0f}" if pnl >= 0 else f"-${abs(pnl):,.0f}"
-                
+
                 st.markdown(f"""
                     <div class="day-card {css_class}">
                         <div style="font-size:18px; font-weight:bold;">{pnl_fmt}</div>
@@ -178,6 +198,7 @@ def render_weekly_calendar(df, title_key):
                 """, unsafe_allow_html=True)
     st.markdown("---")
 
+
 # --- FUNCȚIE RENDER ANALIZĂ COMPLETĂ ---
 def render_full_analysis(df, title_prefix, selected_months_list):
     if df.empty:
@@ -192,13 +213,21 @@ def render_full_analysis(df, title_prefix, selected_months_list):
     neg_loss = abs(df[df['Net P&L USD'] < 0]['Net P&L USD'].sum())
     pf = pos_profit / neg_loss if neg_loss > 0 else pos_profit
 
+    avg_win = df[df['Net P&L USD'] > 0]['Net P&L USD'].mean() if wins_count > 0 else 0
+    avg_loss = abs(df[df['Net P&L USD'] < 0]['Net P&L USD'].mean()) if losses_count > 0 else 0
+    rr_ratio = avg_win / avg_loss if avg_loss > 0 else avg_win
+
     df_dd = df.sort_values('Entry Time').copy()
     df_dd['Cumulative'] = df_dd['Net P&L USD'].cumsum()
     df_dd['Peak'] = df_dd['Cumulative'].cummax()
     df_dd['Drawdown'] = df_dd['Cumulative'] - df_dd['Peak']
     gen_max_dd = df_dd['Drawdown'].min()
 
-    # RÂNDUL 1: Profit, PF, Win Rate (Modificate pentru dimensiune unitară)
+    max_win_streak, max_loss_streak = get_max_streaks(df)
+    best_trade = df['Net P&L USD'].max()
+    worst_trade = df['Net P&L USD'].min()
+
+    # RÂNDUL 1: Profit, PF, Win Rate
     r1_c1, r1_c2, r1_c3 = st.columns(3)
     with r1_c1:
         st.markdown(f"<div class='stat-card'><div class='stat-label'>Profit Net Brut</div><div class='stat-value' style='color:#00cf8d'>${total_pnl:,.2f}</div></div>", unsafe_allow_html=True)
@@ -207,17 +236,14 @@ def render_full_analysis(df, title_prefix, selected_months_list):
     with r1_c3:
         st.markdown(f"<div class='stat-card'><div class='stat-label'>Win Rate General</div><div class='stat-value'>{wr:.1f}%</div></div>", unsafe_allow_html=True)
 
-    st.write("") # Mic spațiu între rânduri
+    st.write("")
 
-    # RÂNDUL 2: Max DD, Total Trades, Trade Direction (Același dimensiuni ca Rândul 1)
+    # RÂNDUL 2: Max DD, Total Trades, Trade Direction
     r2_c1, r2_c2, r2_c3 = st.columns(3)
-    
     with r2_c1:
         st.markdown(f"<div class='stat-card'><div class='stat-label'>Max Drawdown (1 Cont)</div><div class='stat-value' style='color:#ff4b4b'>${gen_max_dd:,.2f}</div></div>", unsafe_allow_html=True)
-    
     with r2_c2:
         st.markdown(f"<div class='stat-card'><div class='stat-label'>Total Trades</div><div class='stat-value'>{len(df)}</div><div class='stat-sub'>{wins_count}W / {losses_count}L</div></div>", unsafe_allow_html=True)
-        
     with r2_c3:
         longs = df[df['Direction'] == 'Long']
         shorts = df[df['Direction'] == 'Short']
@@ -225,24 +251,56 @@ def render_full_analysis(df, title_prefix, selected_months_list):
         l_l = len(longs[longs['Net P&L USD'] < 0])
         s_w = len(shorts[shorts['Net P&L USD'] > 0])
         s_l = len(shorts[shorts['Net P&L USD'] < 0])
-        
         st.markdown(f"""
         <div class="stat-card">
             <div class="stat-label">Trade Direction</div>
             <div style="display: flex; justify-content: space-between; font-size:14px;">
-                <span>🔼 <strong>Long:</strong> {len(longs)}</span> 
+                <span>🔼 <strong>Long:</strong> {len(longs)}</span>
                 <span style="color:#aaa;">({l_w}W / {l_l}L)</span>
             </div>
             <div style="display: flex; justify-content: space-between; margin-top: 5px; font-size:14px;">
-                <span>🔽 <strong>Short:</strong> {len(shorts)}</span> 
+                <span>🔽 <strong>Short:</strong> {len(shorts)}</span>
                 <span style="color:#aaa;">({s_w}W / {s_l}L)</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.write("")
+
+    # RÂNDUL 3: Avg Win, Avg Loss, R:R Ratio
+    r3_c1, r3_c2, r3_c3 = st.columns(3)
+    with r3_c1:
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg Win</div><div class='stat-value' style='color:#00cf8d'>${avg_win:,.2f}</div></div>", unsafe_allow_html=True)
+    with r3_c2:
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg Loss</div><div class='stat-value' style='color:#ff4b4b'>${avg_loss:,.2f}</div></div>", unsafe_allow_html=True)
+    with r3_c3:
+        rr_color = "#00cf8d" if rr_ratio >= 1 else "#ff4b4b"
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Risk / Reward Ratio</div><div class='stat-value' style='color:{rr_color}'>{rr_ratio:.2f}R</div><div class='stat-sub'>Avg Win / Avg Loss</div></div>", unsafe_allow_html=True)
+
+    st.write("")
+
+    # RÂNDUL 4: Max Win Streak, Max Loss Streak, Best/Worst Trade
+    r4_c1, r4_c2, r4_c3 = st.columns(3)
+    with r4_c1:
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Max Win Streak</div><div class='stat-value' style='color:#00cf8d'>{max_win_streak} wins</div></div>", unsafe_allow_html=True)
+    with r4_c2:
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Max Loss Streak</div><div class='stat-value' style='color:#ff4b4b'>{max_loss_streak} losses</div></div>", unsafe_allow_html=True)
+    with r4_c3:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div class="stat-label">Best / Worst Trade</div>
+            <div style="display: flex; justify-content: space-between; font-size:14px; margin-top:4px;">
+                <span>🏆 Best:</span><span style="color:#00cf8d; font-weight:bold;">${best_trade:,.2f}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size:14px; margin-top:4px;">
+                <span>💀 Worst:</span><span style="color:#ff4b4b; font-weight:bold;">${worst_trade:,.2f}</span>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
     st.markdown("---")
     st.subheader(f"💰 Analiză Cicluri Payout — {title_prefix}")
-    
+
     col_input1, col_input2 = st.columns(2)
     with col_input1:
         num_acc = st.slider("Număr de conturi funded:", 1, 10, 4, key=f"sl_acc_{title_prefix}")
@@ -250,7 +308,6 @@ def render_full_analysis(df, title_prefix, selected_months_list):
         payout_days = st.select_slider("Ciclu Payout (zile):", options=[7, 14, 15, 21, 30], value=14, key=f"sl_days_{title_prefix}")
 
     total_pay, cycles, current_bal = simulate_payout_timeline(df, num_acc, payout_days)
-
     max_dd_global = min([c['Max DD Ciclu'] for c in cycles]) if cycles else 0.0
 
     col_payout, col_balance = st.columns([1, 1])
@@ -268,7 +325,7 @@ def render_full_analysis(df, title_prefix, selected_months_list):
                 <p style="margin:0; font-size:13px; opacity:0.5;">{len(cycles) if cycles else 0} cicluri identificate</p>
             </div>
         """, unsafe_allow_html=True)
-    
+
     with col_balance:
         with st.container(height=260):
             st.write("**Balanță Curentă Conturi:**")
@@ -285,10 +342,10 @@ def render_full_analysis(df, title_prefix, selected_months_list):
             df_c = df_c.sort_values('Luna')
         monthly_pay = df_c.groupby('Luna', sort=False)['Payout'].sum().reset_index()
         monthly_pay['Luna_Formatata'] = monthly_pay['Luna'].dt.strftime('%b %Y')
-        fig_p = px.bar(monthly_pay, x='Luna_Formatata', y='Payout', 
+        fig_p = px.bar(monthly_pay, x='Luna_Formatata', y='Payout',
                     title=f"Profit Net pe Luni (Ciclu {payout_days} zile)",
                     text_auto='.2s',
-                    template="plotly_dark", 
+                    template="plotly_dark",
                     color_discrete_sequence=['#00cf8d'])
         fig_p.update_layout(xaxis={'categoryorder':'trace'}, hovermode="x unified", margin=dict(t=50, b=0, l=0, r=0))
         st.plotly_chart(fig_p, use_container_width=True)
@@ -313,7 +370,7 @@ def render_full_analysis(df, title_prefix, selected_months_list):
         Total_Trades=('Result', 'count'), WR=('Result', lambda x: (len(x[x=='Win'])/len(x))*100 if len(x)>0 else 0)
     ).reset_index()
     hour_stats['Time Label'] = hour_stats['Hour'].apply(lambda x: f"{int(x):02d}:00")
-    fig_hour = px.bar(hour_stats, x='Time Label', y='Profit', 
+    fig_hour = px.bar(hour_stats, x='Time Label', y='Profit',
                     text=hour_stats.apply(lambda r: f"${r['Profit']:,.0f}<br>{r['WR']:.0f}% ({int(r['W'])}W/{int(r['L'])}L)", axis=1),
                     template="plotly_dark", color='Profit', color_continuous_scale='RdYlGn')
     fig_hour.update_traces(textposition='outside')
@@ -324,17 +381,15 @@ def render_full_analysis(df, title_prefix, selected_months_list):
         st.markdown("#### 🟢 Top 5 Winning Hours (Intrare)")
         top_5_wr = hour_stats[hour_stats['Total_Trades'] > 0].sort_values(by=['WR', 'Profit'], ascending=False).head(5)
         for _, row in top_5_wr.iterrows():
-            st.markdown(f"""<div class="top-box">Ora <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br> 
+            st.markdown(f"""<div class="top-box">Ora <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br>
                         <small>Profit: ${row['Profit']:,.2f} | Scor: {int(row['W'])}W - {int(row['L'])}L</small></div>""", unsafe_allow_html=True)
-
     with bottom_col:
         st.markdown("#### 🔴 Top 5 Losing Hours (Intrare)")
         bottom_5_wr = hour_stats[hour_stats['Total_Trades'] > 0].sort_values(by=['WR', 'Profit'], ascending=True).head(5)
         for _, row in bottom_5_wr.iterrows():
-            st.markdown(f"""<div class="bottom-box">Ora <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br> 
+            st.markdown(f"""<div class="bottom-box">Ora <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br>
                         <small>Profit: ${row['Profit']:,.2f} | Scor: {int(row['W'])}W - {int(row['L'])}L</small></div>""", unsafe_allow_html=True)
 
-    # ---------------- NOUĂ SECȚIUNE ORE IEȘIRE ----------------
     st.markdown("---")
     st.subheader("🚪 Analiză pe Ore (IEȘIRE)")
     exit_hour_stats = df.dropna(subset=['Exit_Hour']).groupby('Exit_Hour').agg(
@@ -342,8 +397,7 @@ def render_full_analysis(df, title_prefix, selected_months_list):
         Total_Trades=('Result', 'count'), WR=('Result', lambda x: (len(x[x=='Win'])/len(x))*100 if len(x)>0 else 0)
     ).reset_index()
     exit_hour_stats['Time Label'] = exit_hour_stats['Exit_Hour'].apply(lambda x: f"{int(x):02d}:00")
-    
-    fig_exit_hour = px.bar(exit_hour_stats, x='Time Label', y='Profit', 
+    fig_exit_hour = px.bar(exit_hour_stats, x='Time Label', y='Profit',
                     text=exit_hour_stats.apply(lambda r: f"${r['Profit']:,.0f}<br>{r['WR']:.0f}% ({int(r['W'])}W/{int(r['L'])}L)", axis=1),
                     template="plotly_dark", color='Profit', color_continuous_scale='RdYlGn')
     fig_exit_hour.update_traces(textposition='outside')
@@ -354,15 +408,40 @@ def render_full_analysis(df, title_prefix, selected_months_list):
         st.markdown("#### 🟢 Top 5 Winning Hours (Ieșire)")
         top_5_wr_ex = exit_hour_stats[exit_hour_stats['Total_Trades'] > 0].sort_values(by=['WR', 'Profit'], ascending=False).head(5)
         for _, row in top_5_wr_ex.iterrows():
-            st.markdown(f"""<div class="top-box">Ora <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br> 
+            st.markdown(f"""<div class="top-box">Ora <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br>
                         <small>Profit: ${row['Profit']:,.2f} | Scor: {int(row['W'])}W - {int(row['L'])}L</small></div>""", unsafe_allow_html=True)
-
     with bottom_col_ex:
         st.markdown("#### 🔴 Top 5 Losing Hours (Ieșire)")
         bottom_5_wr_ex = exit_hour_stats[exit_hour_stats['Total_Trades'] > 0].sort_values(by=['WR', 'Profit'], ascending=True).head(5)
         for _, row in bottom_5_wr_ex.iterrows():
-            st.markdown(f"""<div class="bottom-box">Ora <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br> 
+            st.markdown(f"""<div class="bottom-box">Ora <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br>
                         <small>Profit: ${row['Profit']:,.2f} | Scor: {int(row['W'])}W - {int(row['L'])}L</small></div>""", unsafe_allow_html=True)
+
+    # --- HEATMAP ORA x ZI ---
+    st.markdown("---")
+    st.subheader("🗺️ Heatmap Win Rate — Ora × Zi")
+    order_days_hm = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
+    hm_data = df[df['Day'].isin(order_days_hm)].groupby(['Day', 'Hour']).agg(
+        WR=('Result', lambda x: (x == 'Win').sum() / len(x) * 100),
+        Total=('Result', 'count')
+    ).reset_index()
+    if not hm_data.empty:
+        hm_pivot = hm_data.pivot(index='Day', columns='Hour', values='WR').reindex(order_days_hm)
+        fig_hm = px.imshow(
+            hm_pivot,
+            color_continuous_scale='RdYlGn',
+            zmin=0, zmax=100,
+            aspect='auto',
+            template='plotly_dark',
+            labels=dict(x="Ora", y="Zi", color="Win Rate %")
+        )
+        fig_hm.update_xaxes(
+            tickmode='array',
+            tickvals=list(hm_pivot.columns),
+            ticktext=[f"{int(h):02d}:00" for h in hm_pivot.columns]
+        )
+        fig_hm.update_layout(margin=dict(t=30, b=0, l=0, r=0))
+        st.plotly_chart(fig_hm, use_container_width=True)
 
     st.markdown("---")
     st.subheader("📊 Performanță pe Zile")
@@ -371,7 +450,7 @@ def render_full_analysis(df, title_prefix, selected_months_list):
         Profit=('Net P&L USD', 'sum'), W=('Result', lambda x: (x == 'Win').sum()), L=('Result', lambda x: (x == 'Loss').sum()),
         WR=('Result', lambda x: (len(x[x=='Win'])/len(x))*100 if len(x)>0 else 0)
     ).reindex(order_days).dropna(subset=['Profit']).reset_index()
-    fig_day = px.bar(day_stats, x='Day', y='Profit', 
+    fig_day = px.bar(day_stats, x='Day', y='Profit',
                     text=day_stats.apply(lambda r: f"${r['Profit']:,.0f}<br>{r['WR']:.0f}% ({int(r['W'])}W/{int(r['L'])}L)", axis=1),
                     template="plotly_dark", color='Profit', color_continuous_scale='RdYlGn')
     fig_day.update_traces(textposition='outside')
@@ -381,14 +460,14 @@ def render_full_analysis(df, title_prefix, selected_months_list):
     st.subheader("📆 Performanță pe Luni")
     month_order = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
     month_stats = df.groupby('Month').agg(
-        Profit=('Net P&L USD', 'sum'), 
-        W=('Result', lambda x: (x == 'Win').sum()), 
+        Profit=('Net P&L USD', 'sum'),
+        W=('Result', lambda x: (x == 'Win').sum()),
         L=('Result', lambda x: (x == 'Loss').sum()),
         WR=('Result', lambda x: (len(x[x=='Win'])/len(x))*100 if len(x)>0 else 0)
     ).reset_index()
     month_stats['Month'] = pd.Categorical(month_stats['Month'], categories=month_order, ordered=True)
     month_stats = month_stats.sort_values('Month').dropna(subset=['Profit'])
-    fig_month = px.bar(month_stats, x='Month', y='Profit', 
+    fig_month = px.bar(month_stats, x='Month', y='Profit',
                     text=month_stats.apply(lambda r: f"${r['Profit']:,.0f}<br>{r['WR']:.0f}% ({int(r['W'])}W/{int(r['L'])}L)", axis=1),
                     template="plotly_dark", color='Profit', color_continuous_scale='RdYlGn')
     fig_month.update_traces(textposition='outside')
@@ -400,11 +479,90 @@ def render_full_analysis(df, title_prefix, selected_months_list):
         Profit=('Net P&L USD', 'sum'), W=('Result', lambda x: (x == 'Win').sum()), L=('Result', lambda x: (x == 'Loss').sum()),
         WR=('Result', lambda x: (len(x[x=='Win'])/len(x))*100 if len(x)>0 else 0)
     ).reset_index()
-    fig_yr = px.bar(yearly, x='Year', y='Profit', 
+    fig_yr = px.bar(yearly, x='Year', y='Profit',
                     text=yearly.apply(lambda r: f"${r['Profit']:,.0f}<br>{r['WR']:.0f}% ({int(r['W'])}W/{int(r['L'])}L)", axis=1),
                     template="plotly_dark", color='Profit', color_continuous_scale='Greens')
     fig_yr.update_traces(textposition='outside')
     st.plotly_chart(fig_yr, use_container_width=True)
+
+    # --- DURATĂ TRADE-URI ---
+    st.markdown("---")
+    st.subheader("⏱️ Analiză Durată Trade-uri")
+    if 'Duration_Min' in df.columns:
+        df_wins_dur = df[df['Result'] == 'Win']['Duration_Min'].dropna()
+        df_loss_dur = df[df['Result'] == 'Loss']['Duration_Min'].dropna()
+
+        def fmt_dur(minutes):
+            if pd.isna(minutes) or minutes == 0: return "N/A"
+            h = int(minutes // 60)
+            m = int(minutes % 60)
+            return f"{h}h {m}m" if h > 0 else f"{m}m"
+
+        dur_c1, dur_c2, dur_c3, dur_c4 = st.columns(4)
+        with dur_c1:
+            avg_w = df_wins_dur.mean() if not df_wins_dur.empty else 0
+            st.markdown(f"<div class='stat-card'><div class='stat-label'>Durată Medie Win</div><div class='stat-value' style='color:#00cf8d'>{fmt_dur(avg_w)}</div></div>", unsafe_allow_html=True)
+        with dur_c2:
+            avg_l = df_loss_dur.mean() if not df_loss_dur.empty else 0
+            st.markdown(f"<div class='stat-card'><div class='stat-label'>Durată Medie Loss</div><div class='stat-value' style='color:#ff4b4b'>{fmt_dur(avg_l)}</div></div>", unsafe_allow_html=True)
+        with dur_c3:
+            max_dur = df['Duration_Min'].max()
+            st.markdown(f"<div class='stat-card'><div class='stat-label'>Trade Cel Mai Lung</div><div class='stat-value'>{fmt_dur(max_dur)}</div></div>", unsafe_allow_html=True)
+        with dur_c4:
+            min_dur = df['Duration_Min'].min()
+            st.markdown(f"<div class='stat-card'><div class='stat-label'>Trade Cel Mai Scurt</div><div class='stat-value'>{fmt_dur(min_dur)}</div></div>", unsafe_allow_html=True)
+
+        st.write("")
+        df_dur_plot = df[['Duration_Min', 'Result']].dropna()
+        if not df_dur_plot.empty:
+            fig_dur = px.histogram(
+                df_dur_plot, x='Duration_Min', color='Result',
+                color_discrete_map={'Win': '#00cf8d', 'Loss': '#ff4b4b'},
+                nbins=30, template='plotly_dark',
+                labels={'Duration_Min': 'Durată (minute)', 'count': 'Nr. Trades'},
+                title='Distribuție Durată Trade-uri (Win vs Loss)'
+            )
+            fig_dur.update_layout(bargap=0.1, margin=dict(t=50, b=0, l=0, r=0))
+            st.plotly_chart(fig_dur, use_container_width=True)
+
+    # --- ANALIZĂ PE SIGNAL ---
+    st.markdown("---")
+    st.subheader("🎯 Analiză pe Signal / Setup")
+    if 'Signal' in df.columns:
+        df_sig = df.dropna(subset=['Signal'])
+        df_sig = df_sig[df_sig['Signal'].astype(str).str.strip() != '']
+        if not df_sig.empty:
+            signal_stats = df_sig.groupby('Signal').agg(
+                Profit=('Net P&L USD', 'sum'),
+                W=('Result', lambda x: (x == 'Win').sum()),
+                L=('Result', lambda x: (x == 'Loss').sum()),
+                Total=('Result', 'count'),
+                WR=('Result', lambda x: (x == 'Win').sum() / len(x) * 100),
+                Avg_Win=('Net P&L USD', lambda x: x[x > 0].mean() if (x > 0).any() else 0),
+                Avg_Loss=('Net P&L USD', lambda x: abs(x[x < 0].mean()) if (x < 0).any() else 0),
+            ).reset_index()
+            signal_stats['RR'] = signal_stats.apply(
+                lambda r: r['Avg_Win'] / r['Avg_Loss'] if r['Avg_Loss'] > 0 else r['Avg_Win'], axis=1
+            )
+            fig_sig = px.bar(
+                signal_stats, x='Signal', y='Profit',
+                text=signal_stats.apply(lambda r: f"${r['Profit']:,.0f}<br>{r['WR']:.0f}% ({int(r['W'])}W/{int(r['L'])}L)", axis=1),
+                template='plotly_dark', color='Profit', color_continuous_scale='RdYlGn'
+            )
+            fig_sig.update_traces(textposition='outside')
+            st.plotly_chart(fig_sig, use_container_width=True)
+
+            with st.expander("Tabel detaliat pe Signal"):
+                display_sig = signal_stats[['Signal', 'Total', 'W', 'L', 'WR', 'Profit', 'Avg_Win', 'Avg_Loss', 'RR']].copy()
+                display_sig.columns = ['Signal', 'Total', 'Win', 'Loss', 'Win Rate %', 'Profit', 'Avg Win', 'Avg Loss', 'R:R']
+                st.dataframe(display_sig.style.format({
+                    'Win Rate %': '{:.1f}%', 'Profit': '${:,.2f}',
+                    'Avg Win': '${:,.2f}', 'Avg Loss': '${:,.2f}', 'R:R': '{:.2f}'
+                }), use_container_width=True)
+        else:
+            st.info("Nu există date Signal / Setup în acest set de trade-uri.")
+    else:
+        st.info("Coloana 'Signal' nu a fost găsită în date.")
 
     st.markdown("---")
     st.subheader("📈 Equity Curve Strategie (Global)")
@@ -414,9 +572,10 @@ def render_full_analysis(df, title_prefix, selected_months_list):
 
     st.markdown("---")
     with st.expander(f"📑 Jurnal Detaliat — {title_prefix}"):
-        cols_to_show = ['Entry Time', 'Direction', 'Signal', 'Net P&L USD', 'Result', 'Trade #']
+        cols_to_show = ['Entry Time', 'Exit Time', 'Direction', 'Signal', 'Net P&L USD', 'Result', 'Trade #', 'Duration_Min']
         existing_cols = [col for col in cols_to_show if col in df.columns]
         st.dataframe(df[existing_cols].sort_values('Entry Time', ascending=False), use_container_width=True)
+
 
 # 4. LOGICĂ DATE + FILTRE
 st.title("🏆 TradingView Payout & Strategy")
@@ -427,28 +586,29 @@ if uploaded_file:
         df_raw = pd.read_excel(uploaded_file, sheet_name='List of trades', engine='openpyxl')
         df_entries = df_raw[df_raw['Type'].str.contains('Entry', na=False)].copy()
         df_exits = df_raw[df_raw['Type'].str.contains('Exit', na=False)].copy()
-        
+
         df_entries['Entry Time'] = pd.to_datetime(df_entries['Date and time'])
         df_exits['Exit Time'] = pd.to_datetime(df_exits['Date and time'])
-        
+
         df_combined = pd.merge(df_exits, df_entries[['Trade #', 'Entry Time', 'Type']], on='Trade #', how='left')
         df_combined = df_combined.drop_duplicates(subset='Trade #', keep='first')
-        
+
         df_combined['Entry Time'] = df_combined['Entry Time'].fillna(df_combined['Exit Time'])
-        
+
         def get_direction(val):
             val_str = str(val).lower()
             if 'long' in val_str: return 'Long'
             if 'short' in val_str: return 'Short'
             return 'Other'
-        
+
         df_combined['Direction'] = df_combined['Type_y'].apply(get_direction)
         df_combined['Hour'] = df_combined['Entry Time'].dt.hour
-        df_combined['Exit_Hour'] = df_combined['Exit Time'].dt.hour 
+        df_combined['Exit_Hour'] = df_combined['Exit Time'].dt.hour
         df_combined['Year'] = df_combined['Entry Time'].dt.year
         df_combined['Month'] = df_combined['Entry Time'].dt.month_name()
         df_combined['Day'] = df_combined['Entry Time'].dt.day_name()
         df_combined['Result'] = df_combined['Net P&L USD'].apply(lambda x: 'Win' if x > 0 else 'Loss')
+        df_combined['Duration_Min'] = (df_combined['Exit Time'] - df_combined['Entry Time']).dt.total_seconds() / 60
 
         def get_session(row_time):
             pivot = datetime.strptime("15:30", "%H:%M").time()
@@ -486,9 +646,16 @@ if uploaded_file:
         wins_f = len(df_final[df_final['Result'] == 'Win'])
         losses_f = len(df_final[df_final['Result'] == 'Loss'])
         with st.expander(f"📋 Toate Tranzacțiile Filtrate — {len(df_final)} trades ({wins_f}W / {losses_f}L)", expanded=False):
-            cols_to_show = ['Entry Time', 'Exit Time', 'Direction', 'Signal', 'Net P&L USD', 'Result', 'Trade #', 'Session']
+            cols_to_show = ['Entry Time', 'Exit Time', 'Direction', 'Signal', 'Net P&L USD', 'Result', 'Trade #', 'Session', 'Duration_Min']
             existing_cols = [col for col in cols_to_show if col in df_final.columns]
             st.dataframe(df_final[existing_cols].sort_values('Entry Time', ascending=False), use_container_width=True)
+            csv_data = df_final[existing_cols].sort_values('Entry Time', ascending=False).to_csv(index=False)
+            st.download_button(
+                label="⬇️ Export CSV",
+                data=csv_data,
+                file_name="trades_filtrate.csv",
+                mime="text/csv"
+            )
 
         tab_global, tab_s1, tab_s2 = st.tabs(["🌍 Global", "🌅 Sesiunea 1", "🌆 Sesiunea 2"])
         with tab_global: render_full_analysis(df_final, "Global", [])
