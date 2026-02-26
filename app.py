@@ -20,18 +20,42 @@ st.set_page_config(page_title="TradingView Payout & Strategy", layout="wide")
 st.markdown("""
     <style>
     .stApp { background-color: #0e1117; color: white; }
-    .stMetric { background-color: #161b22; border-radius: 10px; padding: 15px; border: 1px solid #30363d; }
+    
+    /* Stil unitar pentru toate box-urile de statistici */
+    .stat-card {
+        background-color: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 10px;
+        padding: 15px;
+        height: 110px; /* Înălțime fixă pentru aliniere perfectă */
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+    .stat-label {
+        color: #8b949e;
+        font-size: 13px;
+        text-transform: uppercase;
+        font-weight: 600;
+        margin-bottom: 8px;
+        letter-spacing: 0.5px;
+    }
+    .stat-value {
+        font-size: 24px;
+        font-weight: bold;
+        line-height: 1.2;
+    }
+    .stat-sub {
+        font-size: 13px;
+        color: #8b949e;
+        margin-top: 4px;
+    }
+
     div[data-testid="stExpander"] { background-color: #161b22; border: 1px solid #30363d; }
     .top-box { background-color: #0d2111; border-left: 5px solid #00cf8d; padding: 12px; border-radius: 8px; margin-bottom: 10px; border-right: 1px solid #30363d; border-top: 1px solid #30363d; border-bottom: 1px solid #30363d; }
     .bottom-box { background-color: #210d0d; border-left: 5px solid #cf0000; padding: 12px; border-radius: 8px; margin-bottom: 10px; border-right: 1px solid #30363d; border-top: 1px solid #30363d; border-bottom: 1px solid #30363d; }
-    .payout-card {
-        background: linear-gradient(135deg, #0d2111 0%, #051008 100%);
-        padding: 20px; border-radius: 15px; border: 1px solid #00cf8d; text-align: center; margin-bottom: 10px;
-    }
-    .day-card {
-        padding: 10px; border-radius: 8px; text-align: center; margin: 2px;
-        border: 1px solid #30363d;
-    }
+    
+    .day-card { padding: 10px; border-radius: 8px; text-align: center; margin: 2px; border: 1px solid #30363d; }
     .day-win { background-color: #0d2111; border-color: #00cf8d; }
     .day-loss { background-color: #210d0d; border-color: #cf0000; }
     .day-neutral { background-color: #161b22; opacity: 0.5; }
@@ -168,27 +192,31 @@ def render_full_analysis(df, title_prefix, selected_months_list):
     neg_loss = abs(df[df['Net P&L USD'] < 0]['Net P&L USD'].sum())
     pf = pos_profit / neg_loss if neg_loss > 0 else pos_profit
 
-    # Calcul Max Drawdown General (1 Cont unic)
     df_dd = df.sort_values('Entry Time').copy()
     df_dd['Cumulative'] = df_dd['Net P&L USD'].cumsum()
     df_dd['Peak'] = df_dd['Cumulative'].cummax()
     df_dd['Drawdown'] = df_dd['Cumulative'] - df_dd['Peak']
     gen_max_dd = df_dd['Drawdown'].min()
 
-    # RÂNDUL 1: Profit, PF, Win Rate
+    # RÂNDUL 1: Profit, PF, Win Rate (Modificate pentru dimensiune unitară)
     r1_c1, r1_c2, r1_c3 = st.columns(3)
-    r1_c1.metric("Profit Net Brut", f"${total_pnl:,.2f}")
-    r1_c2.metric("Profit Factor", f"{pf:.2f}")
-    r1_c3.metric("Win Rate General", f"{wr:.1f}%")
+    with r1_c1:
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Profit Net Brut</div><div class='stat-value' style='color:#00cf8d'>${total_pnl:,.2f}</div></div>", unsafe_allow_html=True)
+    with r1_c2:
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Profit Factor</div><div class='stat-value'>{pf:.2f}</div></div>", unsafe_allow_html=True)
+    with r1_c3:
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Win Rate General</div><div class='stat-value'>{wr:.1f}%</div></div>", unsafe_allow_html=True)
 
-    # RÂNDUL 2: Max DD, Total Trades, Box Long/Short
-    r2_c1, r2_c2, r2_c3 = st.columns([1, 1, 1.5])
+    st.write("") # Mic spațiu între rânduri
+
+    # RÂNDUL 2: Max DD, Total Trades, Trade Direction (Același dimensiuni ca Rândul 1)
+    r2_c1, r2_c2, r2_c3 = st.columns(3)
     
     with r2_c1:
-        st.metric("Max Drawdown (1 Cont)", f"${gen_max_dd:,.2f}")
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Max Drawdown (1 Cont)</div><div class='stat-value' style='color:#ff4b4b'>${gen_max_dd:,.2f}</div></div>", unsafe_allow_html=True)
     
     with r2_c2:
-        st.metric("Total Trades", f"{len(df)} ({wins_count}W/{losses_count}L)")
+        st.markdown(f"<div class='stat-card'><div class='stat-label'>Total Trades</div><div class='stat-value'>{len(df)}</div><div class='stat-sub'>{wins_count}W / {losses_count}L</div></div>", unsafe_allow_html=True)
         
     with r2_c3:
         longs = df[df['Direction'] == 'Long']
@@ -199,14 +227,15 @@ def render_full_analysis(df, title_prefix, selected_months_list):
         s_l = len(shorts[shorts['Net P&L USD'] < 0])
         
         st.markdown(f"""
-        <div style="display: flex; flex-direction: column; justify-content: center; background-color: #161b22; border-radius: 10px; padding: 10px 15px; border: 1px solid #30363d; height: 85px;">
-            <div style="display: flex; justify-content: space-between;">
+        <div class="stat-card">
+            <div class="stat-label">Trade Direction</div>
+            <div style="display: flex; justify-content: space-between; font-size:14px;">
                 <span>🔼 <strong>Long:</strong> {len(longs)}</span> 
-                <span style="color:#aaa; font-size:13px;">({l_w}W / {l_l}L)</span>
+                <span style="color:#aaa;">({l_w}W / {l_l}L)</span>
             </div>
-            <div style="display: flex; justify-content: space-between; margin-top: 5px;">
+            <div style="display: flex; justify-content: space-between; margin-top: 5px; font-size:14px;">
                 <span>🔽 <strong>Short:</strong> {len(shorts)}</span> 
-                <span style="color:#aaa; font-size:13px;">({s_w}W / {s_l}L)</span>
+                <span style="color:#aaa;">({s_w}W / {s_l}L)</span>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -222,13 +251,12 @@ def render_full_analysis(df, title_prefix, selected_months_list):
 
     total_pay, cycles, current_bal = simulate_payout_timeline(df, num_acc, payout_days)
 
-    # Calcul DD Maxim Global din cicluri
     max_dd_global = min([c['Max DD Ciclu'] for c in cycles]) if cycles else 0.0
 
     col_payout, col_balance = st.columns([1, 1])
     with col_payout:
         st.markdown(f"""
-            <div style="height: 260px; padding: 20px; border-radius: 12px; background-color: #1a1c24; border-left: 5px solid #00cf8d; display: flex; flex-direction: column; justify-content: center; align-items: center; box-sizing: border-box; gap: 10px;">
+            <div style="height: 260px; padding: 20px; border-radius: 12px; background-color: #1a1c24; border-left: 5px solid #00cf8d; display: flex; flex-direction: column; justify-content: center; align-items: center; box-sizing: border-box; gap: 10px; border: 1px solid #30363d;">
                 <div>
                     <p style="margin:0; opacity:0.7; font-size:14px; text-transform: uppercase; text-align: center;">Total Payout ({payout_days} zile)</p>
                     <h1 style="margin:5px 0; color:#00cf8d; font-size:42px; line-height: 1; text-align: center;">${total_pay:,.2f}</h1>
@@ -335,7 +363,6 @@ def render_full_analysis(df, title_prefix, selected_months_list):
         for _, row in bottom_5_wr_ex.iterrows():
             st.markdown(f"""<div class="bottom-box">Ora <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br> 
                         <small>Profit: ${row['Profit']:,.2f} | Scor: {int(row['W'])}W - {int(row['L'])}L</small></div>""", unsafe_allow_html=True)
-    # ---------------------------------------------------------
 
     st.markdown("---")
     st.subheader("📊 Performanță pe Zile")
@@ -404,7 +431,6 @@ if uploaded_file:
         df_entries['Entry Time'] = pd.to_datetime(df_entries['Date and time'])
         df_exits['Exit Time'] = pd.to_datetime(df_exits['Date and time'])
         
-        # COMBINARE + CURĂȚARE DUPLICATE (Rezolvă problema dublării la Sell/Short)
         df_combined = pd.merge(df_exits, df_entries[['Trade #', 'Entry Time', 'Type']], on='Trade #', how='left')
         df_combined = df_combined.drop_duplicates(subset='Trade #', keep='first')
         
