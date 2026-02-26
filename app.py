@@ -175,16 +175,22 @@ def render_full_analysis(df, title_prefix, selected_months_list):
     df_dd['Drawdown'] = df_dd['Cumulative'] - df_dd['Peak']
     gen_max_dd = df_dd['Drawdown'].min()
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Profit Net Brut", f"${total_pnl:,.2f}")
-    m2.metric("Max Drawdown (1 Cont)", f"${gen_max_dd:,.2f}")
-    m3.metric("Profit Factor", f"{pf:.2f}")
-    m4.metric("Win Rate General", f"{wr:.1f}%")
+    # RÂNDUL 1: Profit, PF, Win Rate
+    r1_c1, r1_c2, r1_c3 = st.columns(3)
+    r1_c1.metric("Profit Net Brut", f"${total_pnl:,.2f}")
+    r1_c2.metric("Profit Factor", f"{pf:.2f}")
+    r1_c3.metric("Win Rate General", f"{wr:.1f}%")
 
-    c_trades, c_dirs = st.columns([1, 2])
-    with c_trades:
+    # RÂNDUL 2: Max DD, Total Trades, Box Long/Short
+    r2_c1, r2_c2, r2_c3 = st.columns([1, 1, 1.5])
+    
+    with r2_c1:
+        st.metric("Max Drawdown (1 Cont)", f"${gen_max_dd:,.2f}")
+    
+    with r2_c2:
         st.metric("Total Trades", f"{len(df)} ({wins_count}W/{losses_count}L)")
-    with c_dirs:
+        
+    with r2_c3:
         longs = df[df['Direction'] == 'Long']
         shorts = df[df['Direction'] == 'Short']
         l_w = len(longs[longs['Net P&L USD'] > 0])
@@ -193,9 +199,15 @@ def render_full_analysis(df, title_prefix, selected_months_list):
         s_l = len(shorts[shorts['Net P&L USD'] < 0])
         
         st.markdown(f"""
-        <div style="display: flex; gap: 30px; background-color: #161b22; border-radius: 10px; padding: 15px; border: 1px solid #30363d; height: 100%; align-items: center;">
-            <div><span style="font-size:18px;">🔼</span> <strong>Long:</strong> {len(longs)} <span style="color:#aaa; font-size:14px;">({l_w}W / {l_l}L)</span></div>
-            <div><span style="font-size:18px;">🔽</span> <strong>Short:</strong> {len(shorts)} <span style="color:#aaa; font-size:14px;">({s_w}W / {s_l}L)</span></div>
+        <div style="display: flex; flex-direction: column; justify-content: center; background-color: #161b22; border-radius: 10px; padding: 10px 15px; border: 1px solid #30363d; height: 85px;">
+            <div style="display: flex; justify-content: space-between;">
+                <span>🔼 <strong>Long:</strong> {len(longs)}</span> 
+                <span style="color:#aaa; font-size:13px;">({l_w}W / {l_l}L)</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-top: 5px;">
+                <span>🔽 <strong>Short:</strong> {len(shorts)}</span> 
+                <span style="color:#aaa; font-size:13px;">({s_w}W / {s_l}L)</span>
+            </div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -375,9 +387,7 @@ def render_full_analysis(df, title_prefix, selected_months_list):
 
     st.markdown("---")
     with st.expander(f"📑 Jurnal Detaliat — {title_prefix}"):
-        # AICI am adăugat coloana 'Direction'
         cols_to_show = ['Entry Time', 'Direction', 'Signal', 'Net P&L USD', 'Result', 'Trade #']
-        # Ne asigurăm că dacă 'Signal' lipsește din datele brute să nu dea eroare
         existing_cols = [col for col in cols_to_show if col in df.columns]
         st.dataframe(df[existing_cols].sort_values('Entry Time', ascending=False), use_container_width=True)
 
@@ -394,7 +404,10 @@ if uploaded_file:
         df_entries['Entry Time'] = pd.to_datetime(df_entries['Date and time'])
         df_exits['Exit Time'] = pd.to_datetime(df_exits['Date and time'])
         
+        # COMBINARE + CURĂȚARE DUPLICATE (Rezolvă problema dublării la Sell/Short)
         df_combined = pd.merge(df_exits, df_entries[['Trade #', 'Entry Time', 'Type']], on='Trade #', how='left')
+        df_combined = df_combined.drop_duplicates(subset='Trade #', keep='first')
+        
         df_combined['Entry Time'] = df_combined['Entry Time'].fillna(df_combined['Exit Time'])
         
         def get_direction(val):
