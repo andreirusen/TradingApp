@@ -200,7 +200,7 @@ def render_weekly_calendar(df, title_key):
 
 
 # --- FUNCȚIE RENDER ANALIZĂ COMPLETĂ ---
-def render_full_analysis(df, title_prefix, selected_months_list):
+def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None):
     if df.empty:
         st.warning(f"Nu există date pentru {title_prefix}.")
         return
@@ -223,7 +223,7 @@ def render_full_analysis(df, title_prefix, selected_months_list):
     df_dd['Drawdown'] = df_dd['Cumulative'] - df_dd['Peak']
     gen_max_dd = df_dd['Drawdown'].min()
 
-    max_win_streak, max_loss_streak = get_max_streaks(df)
+    max_win_streak, max_loss_streak = get_max_streaks(df_streak if df_streak is not None else df)
     best_trade = df['Net P&L USD'].max()
     worst_trade = df['Net P&L USD'].min()
 
