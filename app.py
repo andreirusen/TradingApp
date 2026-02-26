@@ -417,31 +417,43 @@ def render_full_analysis(df, title_prefix, selected_months_list):
             st.markdown(f"""<div class="bottom-box">Ora <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br>
                         <small>Profit: ${row['Profit']:,.2f} | Scor: {int(row['W'])}W - {int(row['L'])}L</small></div>""", unsafe_allow_html=True)
 
-    # --- HEATMAP ORA x ZI ---
+    # --- DURATĂ TRADE-URI ---
     st.markdown("---")
-    st.subheader("🗺️ Heatmap Win Rate — Ora × Zi")
-    order_days_hm = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
-    hm_data = df[df['Day'].isin(order_days_hm)].groupby(['Day', 'Hour']).agg(
-        WR=('Result', lambda x: (x == 'Win').sum() / len(x) * 100),
-        Total=('Result', 'count')
-    ).reset_index()
-    if not hm_data.empty:
-        hm_pivot = hm_data.pivot(index='Day', columns='Hour', values='WR').reindex(order_days_hm)
-        fig_hm = px.imshow(
-            hm_pivot,
-            color_continuous_scale='RdYlGn',
-            zmin=0, zmax=100,
-            aspect='auto',
-            template='plotly_dark',
-            labels=dict(x="Ora", y="Zi", color="Win Rate %")
-        )
-        fig_hm.update_xaxes(
-            tickmode='array',
-            tickvals=list(hm_pivot.columns),
-            ticktext=[f"{int(h):02d}:00" for h in hm_pivot.columns]
-        )
-        fig_hm.update_layout(margin=dict(t=30, b=0, l=0, r=0))
-        st.plotly_chart(fig_hm, use_container_width=True)
+    st.subheader("⏱️ Analiză Durată Trade-uri")
+    if 'Duration_Min' in df.columns:
+        df_wins_dur = df[df['Result'] == 'Win']['Duration_Min'].dropna()
+        df_loss_dur = df[df['Result'] == 'Loss']['Duration_Min'].dropna()
+
+        def fmt_dur(minutes):
+            if pd.isna(minutes) or minutes == 0: return "N/A"
+            h = int(minutes // 60)
+            m = int(minutes % 60)
+            return f"{h}h {m}m" if h > 0 else f"{m}m"
+
+        dur_c1, dur_c2, dur_c3, dur_c4 = st.columns(4)
+        with dur_c1:
+            avg_w = df_wins_dur.mean() if not df_wins_dur.empty else 0
+            st.markdown(f"<div class='stat-card'><div class='stat-label'>Durată Medie Win</div><div class='stat-value' style='color:#00cf8d'>{fmt_dur(avg_w)}</div></div>", unsafe_allow_html=True)
+        with dur_c2:
+            avg_l = df_loss_dur.mean() if not df_loss_dur.empty else 0
+            st.markdown(f"<div class='stat-card'><div class='stat-label'>Durată Medie Loss</div><div class='stat-value' style='color:#ff4b4b'>{fmt_dur(avg_l)}</div></div>", unsafe_allow_html=True)
+        with dur_c3:
+            max_dur = df['Duration_Min'].max()
+            st.markdown(f"<div class='stat-card'><div class='stat-label'>Trade Cel Mai Lung</div><div class='stat-value'>{fmt_dur(max_dur)}</div></div>", unsafe_allow_html=True)
+        with dur_c4:
+            min_dur = df['Duration_Min'].min()
+            st.markdown(f"<div class='stat-card'><div class='stat-label'>Trade Cel Mai Scurt</div><div class='stat-value'>{fmt_dur(min_dur)}</div></div>", unsafe_allow_html=True)
+
+        st.write("")
+        df_dur_plot = df[['Duration_Min', 'Result']].dropna()
+        if not df_dur_plot.empty:
+            fig_dur = px.histogram(
+                df_dur_plot, x='Duration_Min', color='Result',
+                color_discrete_map={'Win': '#00cf8d', 'Loss': '#ff4b4b'},
+                nbins=30, template='plotly_dark',
+                labels={'Duration_Min': 'Durată (minute)', 'count': 'Nr. Trades'},
+                title='Distribuție Durată Trade-uri (Win vs Loss)'
+            )
 
     st.markdown("---")
     st.subheader("📊 Performanță pe Zile")
@@ -485,45 +497,6 @@ def render_full_analysis(df, title_prefix, selected_months_list):
     fig_yr.update_traces(textposition='outside')
     st.plotly_chart(fig_yr, use_container_width=True)
 
-    # --- DURATĂ TRADE-URI ---
-    st.markdown("---")
-    st.subheader("⏱️ Analiză Durată Trade-uri")
-    if 'Duration_Min' in df.columns:
-        df_wins_dur = df[df['Result'] == 'Win']['Duration_Min'].dropna()
-        df_loss_dur = df[df['Result'] == 'Loss']['Duration_Min'].dropna()
-
-        def fmt_dur(minutes):
-            if pd.isna(minutes) or minutes == 0: return "N/A"
-            h = int(minutes // 60)
-            m = int(minutes % 60)
-            return f"{h}h {m}m" if h > 0 else f"{m}m"
-
-        dur_c1, dur_c2, dur_c3, dur_c4 = st.columns(4)
-        with dur_c1:
-            avg_w = df_wins_dur.mean() if not df_wins_dur.empty else 0
-            st.markdown(f"<div class='stat-card'><div class='stat-label'>Durată Medie Win</div><div class='stat-value' style='color:#00cf8d'>{fmt_dur(avg_w)}</div></div>", unsafe_allow_html=True)
-        with dur_c2:
-            avg_l = df_loss_dur.mean() if not df_loss_dur.empty else 0
-            st.markdown(f"<div class='stat-card'><div class='stat-label'>Durată Medie Loss</div><div class='stat-value' style='color:#ff4b4b'>{fmt_dur(avg_l)}</div></div>", unsafe_allow_html=True)
-        with dur_c3:
-            max_dur = df['Duration_Min'].max()
-            st.markdown(f"<div class='stat-card'><div class='stat-label'>Trade Cel Mai Lung</div><div class='stat-value'>{fmt_dur(max_dur)}</div></div>", unsafe_allow_html=True)
-        with dur_c4:
-            min_dur = df['Duration_Min'].min()
-            st.markdown(f"<div class='stat-card'><div class='stat-label'>Trade Cel Mai Scurt</div><div class='stat-value'>{fmt_dur(min_dur)}</div></div>", unsafe_allow_html=True)
-
-        st.write("")
-        df_dur_plot = df[['Duration_Min', 'Result']].dropna()
-        if not df_dur_plot.empty:
-            fig_dur = px.histogram(
-                df_dur_plot, x='Duration_Min', color='Result',
-                color_discrete_map={'Win': '#00cf8d', 'Loss': '#ff4b4b'},
-                nbins=30, template='plotly_dark',
-                labels={'Duration_Min': 'Durată (minute)', 'count': 'Nr. Trades'},
-                title='Distribuție Durată Trade-uri (Win vs Loss)'
-            )
-            fig_dur.update_layout(bargap=0.1, margin=dict(t=50, b=0, l=0, r=0))
-            st.plotly_chart(fig_dur, use_container_width=True)
 
     # --- ANALIZĂ PE SIGNAL ---
     st.markdown("---")
