@@ -154,7 +154,7 @@ def render_weekly_calendar(df, title_key):
     st.markdown("---")
 
 # --- FUNCȚIE RENDER ANALIZĂ COMPLETĂ ---
-def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None):
+def render_full_analysis(df, title_prefix, selected_months_list):
     if df.empty:
         st.warning(f"Nu există date pentru {title_prefix}.")
         return
@@ -167,90 +167,11 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
     neg_loss = abs(df[df['Net P&L USD'] < 0]['Net P&L USD'].sum())
     pf = pos_profit / neg_loss if neg_loss > 0 else pos_profit
 
-    avg_win = df[df['Net P&L USD'] > 0]['Net P&L USD'].mean() if wins_count > 0 else 0
-    avg_loss = abs(df[df['Net P&L USD'] < 0]['Net P&L USD'].mean()) if losses_count > 0 else 0
-    rr_ratio = avg_win / avg_loss if avg_loss > 0 else avg_win
-
-    df_dd = df.sort_values('Entry Time').copy()
-    df_dd['Cumulative'] = df_dd['Net P&L USD'].cumsum()
-    df_dd['Peak'] = df_dd['Cumulative'].cummax()
-    df_dd['Drawdown'] = df_dd['Cumulative'] - df_dd['Peak']
-    gen_max_dd = df_dd['Drawdown'].min()
-
-    max_win_streak, max_loss_streak = get_max_streaks(df)
-    best_trade = df['Net P&L USD'].max()
-    worst_trade = df['Net P&L USD'].min()
-
-    # RÂNDUL 1: Profit, PF, Win Rate
-    r1_c1, r1_c2, r1_c3 = st.columns(3)
-    with r1_c1:
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Profit Net Brut</div><div class='stat-value' style='color:#00cf8d'>${total_pnl:,.2f}</div></div>", unsafe_allow_html=True)
-    with r1_c2:
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Profit Factor</div><div class='stat-value'>{pf:.2f}</div></div>", unsafe_allow_html=True)
-    with r1_c3:
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Win Rate General</div><div class='stat-value'>{wr:.1f}%</div></div>", unsafe_allow_html=True)
-
-    st.write("")
-
-    # RÂNDUL 2: Max DD, Total Trades, Trade Direction
-    r2_c1, r2_c2, r2_c3 = st.columns(3)
-    with r2_c1:
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Max Drawdown (1 Cont)</div><div class='stat-value' style='color:#ff4b4b'>${gen_max_dd:,.2f}</div></div>", unsafe_allow_html=True)
-    with r2_c2:
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Total Trades</div><div class='stat-value'>{len(df)}</div><div class='stat-sub'>{wins_count}W / {losses_count}L</div></div>", unsafe_allow_html=True)
-    with r2_c3:
-        longs = df[df['Direction'] == 'Long']
-        shorts = df[df['Direction'] == 'Short']
-        l_w = len(longs[longs['Net P&L USD'] > 0])
-        l_l = len(longs[longs['Net P&L USD'] < 0])
-        s_w = len(shorts[shorts['Net P&L USD'] > 0])
-        s_l = len(shorts[shorts['Net P&L USD'] < 0])
-        st.markdown(f"""
-        <div class="stat-card">
-            <div class="stat-label">Trade Direction</div>
-            <div style="display: flex; justify-content: space-between; font-size:14px;">
-                <span>🔼 <strong>Long:</strong> {len(longs)}</span>
-                <span style="color:#aaa;">({l_w}W / {l_l}L)</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; margin-top: 5px; font-size:14px;">
-                <span>🔽 <strong>Short:</strong> {len(shorts)}</span>
-                <span style="color:#aaa;">({s_w}W / {s_l}L)</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.write("")
-
-    # RÂNDUL 3: Avg Win, Avg Loss, R:R Ratio
-    r3_c1, r3_c2, r3_c3 = st.columns(3)
-    with r3_c1:
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg Win</div><div class='stat-value' style='color:#00cf8d'>${avg_win:,.2f}</div></div>", unsafe_allow_html=True)
-    with r3_c2:
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg Loss</div><div class='stat-value' style='color:#ff4b4b'>${avg_loss:,.2f}</div></div>", unsafe_allow_html=True)
-    with r3_c3:
-        rr_color = "#00cf8d" if rr_ratio >= 1 else "#ff4b4b"
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Risk / Reward Ratio</div><div class='stat-value' style='color:{rr_color}'>{rr_ratio:.2f}R</div><div class='stat-sub'>Avg Win / Avg Loss</div></div>", unsafe_allow_html=True)
-
-    st.write("")
-
-    # RÂNDUL 4: Max Win Streak, Max Loss Streak, Best/Worst Trade
-    r4_c1, r4_c2, r4_c3 = st.columns(3)
-    with r4_c1:
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Max Win Streak</div><div class='stat-value' style='color:#00cf8d'>{max_win_streak} wins</div></div>", unsafe_allow_html=True)
-    with r4_c2:
-        st.markdown(f"<div class='stat-card'><div class='stat-label'>Max Loss Streak</div><div class='stat-value' style='color:#ff4b4b'>{max_loss_streak} losses</div></div>", unsafe_allow_html=True)
-    with r4_c3:
-        st.markdown(f"""
-        <div class="stat-card">
-            <div class="stat-label">Best / Worst Trade</div>
-            <div style="display: flex; justify-content: space-between; font-size:14px; margin-top:4px;">
-                <span>🏆 Best:</span><span style="color:#00cf8d; font-weight:bold;">${best_trade:,.2f}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; font-size:14px; margin-top:4px;">
-                <span>💀 Worst:</span><span style="color:#ff4b4b; font-weight:bold;">${worst_trade:,.2f}</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Profit Net Brut", f"${total_pnl:,.2f}")
+    m2.metric("Profit Factor", f"{pf:.2f}")
+    m3.metric("Win Rate General", f"{wr:.1f}%")
+    m4.metric("Total Trades", f"{len(df)} ({wins_count}W/{losses_count}L)")
 
     st.markdown("---")
     st.subheader(f"💰 Analiză Cicluri Payout — {title_prefix}")
@@ -406,32 +327,10 @@ if uploaded_file:
         with c3: selected_days = st.multiselect("Zilele:", ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'], default=[d for d in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] if d in df_combined['Day'].unique()])
         with c4: selected_dirs = st.multiselect("Direcție:", sorted(df_combined['Direction'].unique()), default=sorted(df_combined['Direction'].unique()))
 
-        df_final = df_combined[
-            (df_combined['Year'].isin(selected_years)) &
-            (df_combined['Month'].isin(selected_months)) &
-            (df_combined['Day'].isin(selected_days)) &
-            (df_combined['Direction'].isin(selected_dirs)) &
-            (df_combined['Result'].isin(selected_results))
-        ]
-
-        wins_f = len(df_final[df_final['Result'] == 'Win'])
-        losses_f = len(df_final[df_final['Result'] == 'Loss'])
-        with st.expander(f"📋 Toate Tranzacțiile Filtrate — {len(df_final)} trades ({wins_f}W / {losses_f}L)", expanded=False):
-            cols_to_show = ['Entry Time', 'Exit Time', 'Direction', 'Signal', 'Net P&L USD', 'Result', 'Trade #', 'Session', 'Duration_Min']
-            existing_cols = [col for col in cols_to_show if col in df_final.columns]
-            st.dataframe(df_final[existing_cols].sort_values('Entry Time', ascending=False), use_container_width=True)
-            csv_data = df_final[existing_cols].sort_values('Entry Time', ascending=False).to_csv(index=False)
-            st.download_button(
-                label="⬇️ Export CSV",
-                data=csv_data,
-                file_name="trades_filtrate.csv",
-                mime="text/csv"
-            )
+        df_final = df_combined[(df_combined['Year'].isin(selected_years)) & (df_combined['Month'].isin(selected_months)) & (df_combined['Day'].isin(selected_days)) & (df_combined['Direction'].isin(selected_dirs))]
 
         tab_global, tab_s1, tab_s2 = st.tabs(["🌍 Global", "🌅 Sesiunea 1", "🌆 Sesiunea 2"])
         with tab_global: render_full_analysis(df_final, "Global", [])
         with tab_s1: render_full_analysis(df_final[df_final['Session'] == "Sesiunea 1"], "Sesiunea 1", [])
         with tab_s2: render_full_analysis(df_final[df_final['Session'] == "Sesiunea 2"], "Sesiunea 2", [])
-
-    except Exception as e:
-        st.error(f"Eroare: {e}")
+    except Exception as e: st.error(f"Eroare: {e}")
