@@ -14,8 +14,8 @@ except ImportError:
 import plotly.express as px
 import plotly.graph_objects as go
 
-# 2. CONFIGURARE PAGINĂ ȘI DESIGN
-st.set_page_config(page_title="TradingView Payout & Strategy", layout="wide")
+# 2. CONFIGURARE PAGINĂ ȘI DESIGN (Logo adăugat și ca iconiță în tab)
+st.set_page_config(page_title="TradingView Payout & Strategy", page_icon="logo-lvlup.png", layout="wide")
 
 st.markdown("""
     <style>
@@ -62,10 +62,11 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 
-# --- FUNCȚIE CALCUL PROBABILITĂȚI ȘIRURI ---
+# --- FUNCȚIE CALCUL PROBABILITĂȚI ȘIRURI (MODIFICATĂ PENTRU A DETECTA ȘIRUL ACTIV) ---
 def get_streak_probabilities(df):
-    if df.empty: return pd.DataFrame(), pd.DataFrame()
-    results = df['Result'].tolist()
+    if df.empty: return pd.DataFrame(), pd.DataFrame(), ""
+    df_sorted = df.sort_values('Entry Time')
+    results = df_sorted['Result'].tolist()
     win_streaks, loss_streaks = {}, {}
     curr_streak_len, curr_type = 0, None
     for i in range(len(results) - 1):
@@ -78,13 +79,23 @@ def get_streak_probabilities(df):
         if curr_streak_len not in target_dict: target_dict[curr_streak_len] = [0, 0]
         target_dict[curr_streak_len][0] += next_is_win
         target_dict[curr_streak_len][1] += 1
+    
+    # Identificăm șirul activ din prezent (ultimele trade-uri)
+    last_streak_type = results[-1]
+    active_streak_len = 0
+    for res in reversed(results):
+        if res == last_streak_type: active_streak_len += 1
+        else: break
+    active_streak_label = f"{active_streak_len} {last_streak_type}"
+
     def format_dict(d, label):
         data = []
         for k in sorted(d.keys()):
             prob = (d[k][0] / d[k][1]) * 100
             data.append({"Șir curent": f"{k} {label}", "Probabilitate Win Următor": f"{prob:.1f}%", "Eșantion": f"{d[k][1]} ori"})
         return pd.DataFrame(data)
-    return format_dict(win_streaks, "Win"), format_dict(loss_streaks, "Loss")
+
+    return format_dict(win_streaks, "Win"), format_dict(loss_streaks, "Loss"), active_streak_label
 
 
 # --- FUNCȚIE CALCUL MAX STREAK ---
@@ -346,7 +357,7 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
                     template="plotly_dark",
                     color_discrete_sequence=['#00cf8d'])
         fig_p.update_layout(xaxis={'categoryorder':'trace'}, hovermode="x unified", margin=dict(t=50, b=0, l=0, r=0))
-        st.plotly_chart(fig_p, use_container_width=True)
+        st.plotly_chart(fig_p, use_container_width=True, key=f"payout_bar_{title_prefix}")
         with st.expander("Vezi Timeline Detaliat (Inclusiv Drawdown pe fiecare ciclu)"):
             df_cycles_viz = df_c[['Interval', 'Payout', 'Max DD Ciclu', 'Trades']].iloc[::-1]
             st.dataframe(df_cycles_viz.style.format({'Payout': '${:,.2f}', 'Max DD Ciclu': '${:,.2f}'}), use_container_width=True)
@@ -355,11 +366,24 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
 
     render_weekly_calendar(df, title_prefix)
 
+    # --- TABEL PROBABILITĂȚI COLORAT CURENT ---
     st.markdown("### 🎲 Analiză Probabilistică")
-    df_win_prob, df_loss_prob = get_streak_probabilities(df)
+    df_win_prob, df_loss_prob, active_label = get_streak_probabilities(df)
+    
+    # Funcție care colorează rândul activ în tabel
+    def style_streak_row(row):
+        if row['Șir curent'] == active_label:
+            color = '#00cf8d' if 'Win' in active_label else '#cf0000'
+            return [f'background-color: {color}; color: white; font-weight: bold'] * len(row)
+        return [''] * len(row)
+
     col_p1, col_p2 = st.columns(2)
-    with col_p1: st.table(df_win_prob)
-    with col_p2: st.table(df_loss_prob)
+    with col_p1: 
+        if not df_win_prob.empty: st.table(df_win_prob.style.apply(style_streak_row, axis=1))
+        else: st.table(df_win_prob)
+    with col_p2: 
+        if not df_loss_prob.empty: st.table(df_loss_prob.style.apply(style_streak_row, axis=1))
+        else: st.table(df_loss_prob)
 
     st.markdown("---")
     st.subheader("⏰ Analiză pe Ore (INTRARE)")
@@ -372,7 +396,7 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
                     text=hour_stats.apply(lambda r: f"${r['Profit']:,.0f}<br>{r['WR']:.0f}% ({int(r['W'])}W/{int(r['L'])}L)", axis=1),
                     template="plotly_dark", color='Profit', color_continuous_scale='RdYlGn')
     fig_hour.update_traces(textposition='outside')
-    st.plotly_chart(fig_hour, use_container_width=True)
+    st.plotly_chart(fig_hour, use_container_width=True, key=f"hour_in_{title_prefix}")
 
     top_col, bottom_col = st.columns(2)
     with top_col:
@@ -399,7 +423,7 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
                     text=exit_hour_stats.apply(lambda r: f"${r['Profit']:,.0f}<br>{r['WR']:.0f}% ({int(r['W'])}W/{int(r['L'])}L)", axis=1),
                     template="plotly_dark", color='Profit', color_continuous_scale='RdYlGn')
     fig_exit_hour.update_traces(textposition='outside')
-    st.plotly_chart(fig_exit_hour, use_container_width=True)
+    st.plotly_chart(fig_exit_hour, use_container_width=True, key=f"hour_out_{title_prefix}")
 
     top_col_ex, bottom_col_ex = st.columns(2)
     with top_col_ex:
@@ -464,7 +488,7 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
                     text=day_stats.apply(lambda r: f"${r['Profit']:,.0f}<br>{r['WR']:.0f}% ({int(r['W'])}W/{int(r['L'])}L)", axis=1),
                     template="plotly_dark", color='Profit', color_continuous_scale='RdYlGn')
     fig_day.update_traces(textposition='outside')
-    st.plotly_chart(fig_day, use_container_width=True)
+    st.plotly_chart(fig_day, use_container_width=True, key=f"day_bar_{title_prefix}")
 
     st.markdown("---")
     st.subheader("📆 Performanță pe Luni")
@@ -481,7 +505,7 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
                     text=month_stats.apply(lambda r: f"${r['Profit']:,.0f}<br>{r['WR']:.0f}% ({int(r['W'])}W/{int(r['L'])}L)", axis=1),
                     template="plotly_dark", color='Profit', color_continuous_scale='RdYlGn')
     fig_month.update_traces(textposition='outside')
-    st.plotly_chart(fig_month, use_container_width=True)
+    st.plotly_chart(fig_month, use_container_width=True, key=f"month_bar_{title_prefix}")
 
     st.markdown("---")
     st.subheader("📅 Profit pe Ani")
@@ -493,7 +517,7 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
                     text=yearly.apply(lambda r: f"${r['Profit']:,.0f}<br>{r['WR']:.0f}% ({int(r['W'])}W/{int(r['L'])}L)", axis=1),
                     template="plotly_dark", color='Profit', color_continuous_scale='Greens')
     fig_yr.update_traces(textposition='outside')
-    st.plotly_chart(fig_yr, use_container_width=True)
+    st.plotly_chart(fig_yr, use_container_width=True, key=f"year_bar_{title_prefix}")
 
 
     # --- ANALIZĂ PE SIGNAL ---
@@ -521,7 +545,7 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
                 template='plotly_dark', color='Profit', color_continuous_scale='RdYlGn'
             )
             fig_sig.update_traces(textposition='outside')
-            st.plotly_chart(fig_sig, use_container_width=True)
+            st.plotly_chart(fig_sig, use_container_width=True, key=f"signal_bar_{title_prefix}")
 
             with st.expander("Tabel detaliat pe Signal"):
                 display_sig = signal_stats[['Signal', 'Total', 'W', 'L', 'WR', 'Profit', 'Avg_Win', 'Avg_Loss', 'RR']].copy()
@@ -539,7 +563,7 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
     st.subheader("📈 Equity Curve Strategie (Global)")
     df_sorted = df.sort_values('Entry Time')
     df_sorted['Cumulative'] = df_sorted['Net P&L USD'].cumsum()
-    st.plotly_chart(px.line(df_sorted, x='Entry Time', y='Cumulative', template="plotly_dark", color_discrete_sequence=['#00cf8d']), use_container_width=True)
+    st.plotly_chart(px.line(df_sorted, x='Entry Time', y='Cumulative', template="plotly_dark", color_discrete_sequence=['#00cf8d']), use_container_width=True, key=f"equity_{title_prefix}")
 
     st.markdown("---")
     with st.expander(f"📑 Jurnal Detaliat — {title_prefix}"):
@@ -548,8 +572,15 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
         st.dataframe(df[existing_cols].sort_values('Entry Time', ascending=False), use_container_width=True)
 
 
-# 4. LOGICĂ DATE + FILTRE
-st.title("🏆 TradingView Payout & Strategy")
+# 4. LOGICĂ DATE + FILTRE + ADAUGARE LOGO
+# Folosim cele 3 coloane pentru a forța logo-ul pe mijloc
+col_left, col_mid, col_right = st.columns([2, 1, 2])
+with col_mid:
+    st.image("logo-lvlup.png", use_container_width=True) 
+
+# Folosim HTML pentru a centra titlul
+st.markdown("<h1 style='text-align: center;'>🏆 TradingView Payout & Strategy</h1>", unsafe_allow_html=True)
+
 uploaded_file = st.file_uploader("Încarcă fișierul .XLSX", type=["xlsx"])
 
 if uploaded_file:
@@ -587,7 +618,7 @@ if uploaded_file:
         df_combined['Session'] = df_combined['Entry Time'].apply(get_session)
 
         st.markdown("### 🔍 Filtrare Date")
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3, c4 = st.columns(4)
         with c1:
             all_years = sorted(df_combined['Year'].unique())
             selected_years = st.multiselect("Anii:", all_years, default=all_years)
@@ -600,33 +631,13 @@ if uploaded_file:
             avail_d = [d for d in d_order if d in df_combined['Day'].unique()]
             selected_days = st.multiselect("Zilele:", avail_d, default=avail_d)
         with c4:
-            all_dirs = sorted(df_combined['Direction'].unique())
-            selected_dirs = st.multiselect("Direcție (Long/Short):", all_dirs, default=all_dirs)
-        with c5:
-            all_results = ["Win", "Loss"]
-            selected_results = st.multiselect("Rezultat (Win/Loss):", all_results, default=all_results)
+            dirs = sorted(df_combined['Direction'].unique())
+            selected_dirs = st.multiselect("Direcții:", dirs, default=dirs)
 
-        df_final = df_combined[
-            (df_combined['Year'].isin(selected_years)) &
-            (df_combined['Month'].isin(selected_months)) &
-            (df_combined['Day'].isin(selected_days)) &
-            (df_combined['Direction'].isin(selected_dirs)) &
-            (df_combined['Result'].isin(selected_results))
-        ]
-
-        wins_f = len(df_final[df_final['Result'] == 'Win'])
-        losses_f = len(df_final[df_final['Result'] == 'Loss'])
-        # with st.expander(f"📋 Toate Tranzacțiile Filtrate — {len(df_final)} trades ({wins_f}W / {losses_f}L)", expanded=False):
-        #     cols_to_show = ['Entry Time', 'Exit Time', 'Direction', 'Signal', 'Net P&L USD', 'Result', 'Trade #', 'Session', 'Duration_Min']
-        #     existing_cols = [col for col in cols_to_show if col in df_final.columns]
-        #     st.dataframe(df_final[existing_cols].sort_values('Entry Time', ascending=False), use_container_width=True)
-        #     csv_data = df_final[existing_cols].sort_values('Entry Time', ascending=False).to_csv(index=False)
-        #     st.download_button(
-        #         label="⬇️ Export CSV",
-        #         data=csv_data,
-        #         file_name="trades_filtrate.csv",
-        #         mime="text/csv"
-        #     )
+        df_final = df_combined[(df_combined['Year'].isin(selected_years)) & 
+                            (df_combined['Month'].isin(selected_months)) & 
+                            (df_combined['Day'].isin(selected_days)) & 
+                            (df_combined['Direction'].isin(selected_dirs))]
 
         tab_global, tab_s1, tab_s2 = st.tabs(["🌍 Global", "🌅 Sesiunea 1", "🌆 Sesiunea 2"])
         with tab_global: render_full_analysis(df_final, "Global", [])
@@ -634,5 +645,4 @@ if uploaded_file:
         with tab_s2: render_full_analysis(df_final[df_final['Session'] == "Sesiunea 2"], "Sesiunea 2", [])
 
     except Exception as e:
-        st.error(f"Eroare: {e}")
-        
+        st.error(f"Eroare la procesarea fișierului: {e}")
