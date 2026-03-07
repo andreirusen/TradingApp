@@ -727,6 +727,55 @@ if uploaded_file:
         if pnl_col:
             df_combined['Net P&L USD'] = pd.to_numeric(df_combined[pnl_col], errors='coerce').fillna(0)
         
+        
+        st.markdown("### 🔍 Filtrare Date")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1:
+            all_years = sorted(df_combined['Year'].unique())
+            selected_years = st.multiselect("Anii:", all_years, default=all_years)
+        with c2:
+            m_order = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+            avail_m = [m for m in m_order if m in df_combined['Month'].unique()]
+            selected_months = st.multiselect("Lunile:", avail_m, default=avail_m)
+        with c3:
+            d_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            avail_d = [d for d in d_order if d in df_combined['Day'].unique()]
+            selected_days = st.multiselect("Zilele:", avail_d, default=avail_d)
+        with c4:
+            all_dirs = sorted(df_combined['Direction'].unique())
+            selected_dirs = st.multiselect("Direcție (Long/Short):", all_dirs, default=all_dirs)
+        with c5:
+            all_results = ["Win", "Loss"]
+            selected_results = st.multiselect("Rezultat (Win/Loss):", all_results, default=all_results)
+
+        df_final = df_combined[
+            (df_combined['Year'].isin(selected_years)) &
+            (df_combined['Month'].isin(selected_months)) &
+            (df_combined['Day'].isin(selected_days)) &
+            (df_combined['Direction'].isin(selected_dirs)) &
+            (df_combined['Result'].isin(selected_results))
+        ]
+
+        wins_f = len(df_final[df_final['Result'] == 'Win'])
+        losses_f = len(df_final[df_final['Result'] == 'Loss'])
+        with st.expander(f"📋 Toate Tranzacțiile Filtrate — {len(df_final)} trades ({wins_f}W / {losses_f}L)", expanded=False):
+            cols_to_show = ['Entry Time', 'Exit Time', 'Direction', 'Signal', 'Net P&L USD', 'Result', 'Trade #', 'Session', 'Duration_Min']
+            existing_cols = [col for col in cols_to_show if col in df_final.columns]
+            st.dataframe(df_final[existing_cols].sort_values('Entry Time', ascending=False), use_container_width=True)
+            csv_data = df_final[existing_cols].sort_values('Entry Time', ascending=False).to_csv(index=False)
+            st.download_button(
+                label="⬇️ Export CSV",
+                data=csv_data,
+                file_name="trades_filtrate.csv",
+                mime="text/csv"
+            )
+
+        tab_global, tab_s1, tab_s2 = st.tabs(["🌍 Global", "🌅 Sesiunea 1", "🌆 Sesiunea 2"])
+        with tab_global: render_full_analysis(df_final, "Global", [])
+        with tab_s1: render_full_analysis(df_final[df_final['Session'] == "Sesiunea 1"], "Sesiunea 1", [])
+        with tab_s2: render_full_analysis(df_final[df_final['Session'] == "Sesiunea 2"], "Sesiunea 2", [])
+
+
         # 3. Rezultat (Win/Loss)
         df_combined['Result'] = df_combined['Net P&L USD'].apply(lambda x: 'Win' if x > 0 else 'Loss')
 
