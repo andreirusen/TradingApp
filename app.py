@@ -706,12 +706,10 @@ if uploaded_file:
             if 'short' in val_str: return 'Short'
             return 'Other'
         
-        # AICI AM COMPLETAT CODUL TĂU CA SĂ FUNCȚIONEZE:
         type_col = 'Type_y' if 'Type_y' in df_combined.columns else 'Type'
         df_combined['Direction'] = df_combined[type_col].apply(get_direction)
         
-        # 2. Identificăm coloana de P&L (am adăugat și 'Net P&L USD' în listă)
-        # Verificăm pe rând care variantă există în fișierul tău
+        # 2. Identificăm coloana de P&L
         if 'Net P&L USD' in df_combined.columns:
             pnl_col = 'Net P&L USD'
         elif 'Profit/Loss USD' in df_combined.columns:
@@ -719,7 +717,6 @@ if uploaded_file:
         elif 'Profit/Loss' in df_combined.columns:
             pnl_col = 'Profit/Loss'
         else:
-            # Dacă nu găsește nimic, creăm o coloană cu 0 ca să nu crape codul
             pnl_col = None
             df_combined['Net P&L USD'] = 0
             st.warning("Atenție: Nu am găsit nicio coloană de Profit/Loss!")
@@ -727,7 +724,26 @@ if uploaded_file:
         if pnl_col:
             df_combined['Net P&L USD'] = pd.to_numeric(df_combined[pnl_col], errors='coerce').fillna(0)
         
-        
+        # ---> REZOLVARE BUG AICI <---
+        # Am mutat calculul coloanelor înainte de filtre pentru a nu da eroare
+        df_combined['Result'] = df_combined['Net P&L USD'].apply(lambda x: 'Win' if x > 0 else 'Loss')
+        df_combined['Hour'] = df_combined['Entry Time'].dt.hour
+        df_combined['Minute'] = df_combined['Entry Time'].dt.minute
+        df_combined['Exit_Hour'] = df_combined['Exit Time'].dt.hour
+        df_combined['Exit_Minute'] = df_combined['Exit Time'].dt.minute
+        df_combined['Duration_Min'] = (df_combined['Exit Time'] - df_combined['Entry Time']).dt.total_seconds() / 60.0
+        df_combined['Day'] = df_combined['Entry Time'].dt.day_name()
+        df_combined['Month'] = df_combined['Entry Time'].dt.month_name()
+        df_combined['Year'] = df_combined['Entry Time'].dt.year
+
+        if 'Signal' not in df_combined.columns:
+            df_combined['Signal'] = 'N/A'
+            
+        if 'Session' not in df_combined.columns:
+            df_combined['Session'] = 'Sesiunea 1' # Fallback ca să funcționeze afișarea pe tab-uri
+
+        # ----------------------------
+
         st.markdown("### 🔍 Filtrare Date")
         c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
@@ -775,42 +791,11 @@ if uploaded_file:
         with tab_s1: render_full_analysis(df_final[df_final['Session'] == "Sesiunea 1"], "Sesiunea 1", [])
         with tab_s2: render_full_analysis(df_final[df_final['Session'] == "Sesiunea 2"], "Sesiunea 2", [])
 
-
-        # 3. Rezultat (Win/Loss)
-        df_combined['Result'] = df_combined['Net P&L USD'].apply(lambda x: 'Win' if x > 0 else 'Loss')
-
-        # 4. Restul calculelor de timp
-        df_combined['Hour'] = df_combined['Entry Time'].dt.hour
-        df_combined['Minute'] = df_combined['Entry Time'].dt.minute
-        df_combined['Exit_Hour'] = df_combined['Exit Time'].dt.hour
-        df_combined['Exit_Minute'] = df_combined['Exit Time'].dt.minute
-        df_combined['Duration_Min'] = (df_combined['Exit Time'] - df_combined['Entry Time']).dt.total_seconds() / 60.0
-        df_combined['Day'] = df_combined['Entry Time'].dt.day_name()
-        df_combined['Month'] = df_combined['Entry Time'].dt.month_name()
-        df_combined['Year'] = df_combined['Entry Time'].dt.year
-
-        # 5. Corecție pentru coloana 'Signal' (ca să nu dea eroare dacă lipsește)
-        if 'Signal' not in df_combined.columns:
-            df_combined['Signal'] = 'N/A'
-            
-        # Creare restul coloanelor necesare
-        df_combined['Result'] = df_combined['Net P&L USD'].apply(lambda x: 'Win' if x > 0 else 'Loss')
-        df_combined['Hour'] = df_combined['Entry Time'].dt.hour
-        df_combined['Minute'] = df_combined['Entry Time'].dt.minute
-        df_combined['Exit_Hour'] = df_combined['Exit Time'].dt.hour
-        df_combined['Exit_Minute'] = df_combined['Exit Time'].dt.minute
-        df_combined['Duration_Min'] = (df_combined['Exit Time'] - df_combined['Entry Time']).dt.total_seconds() / 60.0
-        df_combined['Day'] = df_combined['Entry Time'].dt.day_name()
-        df_combined['Month'] = df_combined['Entry Time'].dt.month_name()
-        df_combined['Year'] = df_combined['Entry Time'].dt.year
-        df_combined['Signal'] = df_combined['Signal'] if 'Signal' in df_combined.columns else ''
-
-        render_full_analysis(df_combined, "Toate Datele", [], df_combined)
-        
         # --- BUTON DESCARCARE PDF ---
         st.markdown("---")
         st.markdown("<h3 style='text-align: center;'>📄 Exportă Raportul</h3>", unsafe_allow_html=True)
-        pdf_data = generate_pdf_report(df_combined)
+        # Am schimbat df_combined cu df_final ca PDF-ul să descarce datele care sunt filtrate efectiv
+        pdf_data = generate_pdf_report(df_final)
         col_btn1, col_btn2, col_btn3 = st.columns([2, 1, 2])
         with col_btn2:
             st.download_button(
