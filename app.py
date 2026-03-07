@@ -3,6 +3,7 @@ import pandas as pd
 import subprocess
 import sys
 from datetime import timedelta, datetime
+import io
 
 # 1. ASIGURARE DEPENDENȚE
 try:
@@ -10,6 +11,12 @@ try:
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl"])
     import openpyxl
+
+try:
+    from fpdf import FPDF
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "fpdf2"])
+    from fpdf import FPDF
 
 import plotly.express as px
 import plotly.graph_objects as go
@@ -60,6 +67,49 @@ st.markdown("""
     .day-neutral { background-color: #161b22; opacity: 0.5; }
     </style>
     """, unsafe_allow_html=True)
+
+
+# --- FUNCȚIE GENERARE PDF ---
+def generate_pdf_report(df):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("helvetica", "B", 16)
+    pdf.cell(0, 10, "Raport Analiza Trading", ln=True, align="C")
+    pdf.ln(10)
+
+    total_pnl = df['Net P&L USD'].sum()
+    wins_count = len(df[df['Net P&L USD'] > 0])
+    losses_count = len(df[df['Net P&L USD'] < 0])
+    wr = (wins_count / len(df) * 100) if len(df) > 0 else 0
+
+    pdf.set_font("helvetica", "", 12)
+    pdf.cell(0, 10, f"Profit Total Net: ${total_pnl:,.2f}", ln=True)
+    pdf.cell(0, 10, f"Win Rate General: {wr:.1f}% ({wins_count}W / {losses_count}L)", ln=True)
+    pdf.cell(0, 10, f"Total Trades: {len(df)}", ln=True)
+    
+    pdf.ln(5)
+    pdf.set_font("helvetica", "B", 14)
+    pdf.cell(0, 10, "Top 5 Minute de Intrare:", ln=True)
+    pdf.set_font("helvetica", "", 12)
+    
+    if 'Minute' in df.columns:
+        min_stats = df.groupby('Minute').agg(Profit=('Net P&L USD', 'sum'), WR=('Result', lambda x: (len(x[x=='Win'])/len(x))*100 if len(x)>0 else 0), Total=('Result', 'count')).reset_index()
+        top_5 = min_stats[min_stats['Total']>0].sort_values(by=['WR', 'Profit'], ascending=False).head(5)
+        for _, r in top_5.iterrows():
+            pdf.cell(0, 10, f"Minutul xx:{int(r['Minute']):02d} -> Win Rate: {r['WR']:.1f}%, Profit: ${r['Profit']:,.2f}", ln=True)
+
+    pdf.ln(5)
+    pdf.set_font("helvetica", "B", 14)
+    pdf.cell(0, 10, "Top 5 Minute de Iesire:", ln=True)
+    pdf.set_font("helvetica", "", 12)
+    
+    if 'Exit_Minute' in df.columns:
+        exit_min_stats = df.groupby('Exit_Minute').agg(Profit=('Net P&L USD', 'sum'), WR=('Result', lambda x: (len(x[x=='Win'])/len(x))*100 if len(x)>0 else 0), Total=('Result', 'count')).reset_index()
+        top_5_ex = exit_min_stats[exit_min_stats['Total']>0].sort_values(by=['WR', 'Profit'], ascending=False).head(5)
+        for _, r in top_5_ex.iterrows():
+            pdf.cell(0, 10, f"Minutul xx:{int(r['Exit_Minute']):02d} -> Win Rate: {r['WR']:.1f}%, Profit: ${r['Profit']:,.2f}", ln=True)
+
+    return bytes(pdf.output())
 
 
 # --- FUNCȚIE CALCUL PROBABILITĂȚI ȘIRURI (MODIFICATĂ PENTRU A DETECTA ȘIRUL ACTIV) ---
@@ -378,10 +428,10 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
         return [''] * len(row)
 
     col_p1, col_p2 = st.columns(2)
-    with col_p1: 
+    with col_p1:
         if not df_win_prob.empty: st.table(df_win_prob.style.apply(style_streak_row, axis=1))
         else: st.table(df_win_prob)
-    with col_p2: 
+    with col_p2:
         if not df_loss_prob.empty: st.table(df_loss_prob.style.apply(style_streak_row, axis=1))
         else: st.table(df_loss_prob)
 
@@ -412,6 +462,35 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
             st.markdown(f"""<div class="bottom-box">Ora <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br>
                         <small>Profit: ${row['Profit']:,.2f} | Scor: {int(row['W'])}W - {int(row['L'])}L</small></div>""", unsafe_allow_html=True)
 
+    # --- NOU: ANALIZĂ PE MINUTE INTRARE ---
+    st.markdown("---")
+    st.subheader("⏱️ Analiză pe Minutele din Oră (INTRARE)")
+    if 'Minute' in df.columns:
+        min_stats = df.groupby('Minute').agg(
+            Profit=('Net P&L USD', 'sum'), W=('Result', lambda x: (x == 'Win').sum()), L=('Result', lambda x: (x == 'Loss').sum()),
+            Total_Trades=('Result', 'count'), WR=('Result', lambda x: (len(x[x=='Win'])/len(x))*100 if len(x)>0 else 0)
+        ).reset_index()
+        min_stats['Time Label'] = min_stats['Minute'].apply(lambda x: f"xx:{int(x):02d}")
+        fig_min = px.bar(min_stats, x='Time Label', y='Profit',
+                        text=min_stats.apply(lambda r: f"${r['Profit']:,.0f}<br>{r['WR']:.0f}% ({int(r['W'])}W/{int(r['L'])}L)", axis=1),
+                        template="plotly_dark", color='Profit', color_continuous_scale='RdYlGn')
+        fig_min.update_traces(textposition='outside')
+        st.plotly_chart(fig_min, use_container_width=True, key=f"min_in_{title_prefix}")
+
+        top_col_m, bottom_col_m = st.columns(2)
+        with top_col_m:
+            st.markdown("#### 🟢 Top 5 Winning Minutes (Intrare)")
+            top_5_wr_m = min_stats[min_stats['Total_Trades'] > 0].sort_values(by=['WR', 'Profit'], ascending=False).head(5)
+            for _, row in top_5_wr_m.iterrows():
+                st.markdown(f"""<div class="top-box">Minutul <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br>
+                            <small>Profit: ${row['Profit']:,.2f} | Scor: {int(row['W'])}W - {int(row['L'])}L</small></div>""", unsafe_allow_html=True)
+        with bottom_col_m:
+            st.markdown("#### 🔴 Top 5 Losing Minutes (Intrare)")
+            bottom_5_wr_m = min_stats[min_stats['Total_Trades'] > 0].sort_values(by=['WR', 'Profit'], ascending=True).head(5)
+            for _, row in bottom_5_wr_m.iterrows():
+                st.markdown(f"""<div class="bottom-box">Minutul <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br>
+                            <small>Profit: ${row['Profit']:,.2f} | Scor: {int(row['W'])}W - {int(row['L'])}L</small></div>""", unsafe_allow_html=True)
+
     st.markdown("---")
     st.subheader("🚪 Analiză pe Ore (IEȘIRE)")
     exit_hour_stats = df.dropna(subset=['Exit_Hour']).groupby('Exit_Hour').agg(
@@ -438,6 +517,35 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
         for _, row in bottom_5_wr_ex.iterrows():
             st.markdown(f"""<div class="bottom-box">Ora <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br>
                         <small>Profit: ${row['Profit']:,.2f} | Scor: {int(row['W'])}W - {int(row['L'])}L</small></div>""", unsafe_allow_html=True)
+
+    # --- NOU: ANALIZĂ PE MINUTE IESIRE ---
+    st.markdown("---")
+    st.subheader("⏱️ Analiză pe Minutele din Oră (IEȘIRE)")
+    if 'Exit_Minute' in df.columns:
+        exit_min_stats = df.dropna(subset=['Exit_Minute']).groupby('Exit_Minute').agg(
+            Profit=('Net P&L USD', 'sum'), W=('Result', lambda x: (x == 'Win').sum()), L=('Result', lambda x: (x == 'Loss').sum()),
+            Total_Trades=('Result', 'count'), WR=('Result', lambda x: (len(x[x=='Win'])/len(x))*100 if len(x)>0 else 0)
+        ).reset_index()
+        exit_min_stats['Time Label'] = exit_min_stats['Exit_Minute'].apply(lambda x: f"xx:{int(x):02d}")
+        fig_min_ex = px.bar(exit_min_stats, x='Time Label', y='Profit',
+                        text=exit_min_stats.apply(lambda r: f"${r['Profit']:,.0f}<br>{r['WR']:.0f}%", axis=1),
+                        template="plotly_dark", color='Profit', color_continuous_scale='RdYlGn')
+        fig_min_ex.update_traces(textposition='outside')
+        st.plotly_chart(fig_min_ex, use_container_width=True, key=f"min_out_{title_prefix}")
+
+        top_col_m_ex, bottom_col_m_ex = st.columns(2)
+        with top_col_m_ex:
+            st.markdown("#### 🟢 Top 5 Winning Minutes (Ieșire)")
+            top_5_wr_m_ex = exit_min_stats[exit_min_stats['Total_Trades'] > 0].sort_values(by=['WR', 'Profit'], ascending=False).head(5)
+            for _, row in top_5_wr_m_ex.iterrows():
+                st.markdown(f"""<div class="top-box">Minutul <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br>
+                            <small>Profit: ${row['Profit']:,.2f} | Scor: {int(row['W'])}W - {int(row['L'])}L</small></div>""", unsafe_allow_html=True)
+        with bottom_col_m_ex:
+            st.markdown("#### 🔴 Top 5 Losing Minutes (Ieșire)")
+            bottom_5_wr_m_ex = exit_min_stats[exit_min_stats['Total_Trades'] > 0].sort_values(by=['WR', 'Profit'], ascending=True).head(5)
+            for _, row in bottom_5_wr_m_ex.iterrows():
+                st.markdown(f"""<div class="bottom-box">Minutul <b>{row['Time Label']}</b> — Win Rate: <b>{row['WR']:.1f}%</b> <br>
+                            <small>Profit: ${row['Profit']:,.2f} | Scor: {int(row['W'])}W - {int(row['L'])}L</small></div>""", unsafe_allow_html=True)
 
     # --- DURATĂ TRADE-URI ---
     st.markdown("---")
@@ -576,7 +684,7 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
 # Folosim cele 3 coloane pentru a forța logo-ul pe mijloc
 col_left, col_mid, col_right = st.columns([2, 1, 2])
 with col_mid:
-    st.image("logo-lvlup.png", use_container_width=True) 
+    st.image("logo-lvlup.png", use_container_width=True)
 
 # Folosim HTML pentru a centra titlul
 st.markdown("<h1 style='text-align: center;'>🏆 TradingView Payout & Strategy</h1>", unsafe_allow_html=True)
@@ -602,47 +710,72 @@ if uploaded_file:
             if 'long' in val_str: return 'Long'
             if 'short' in val_str: return 'Short'
             return 'Other'
+        
+        # AICI AM COMPLETAT CODUL TĂU CA SĂ FUNCȚIONEZE:
+        type_col = 'Type_y' if 'Type_y' in df_combined.columns else 'Type'
+        df_combined['Direction'] = df_combined[type_col].apply(get_direction)
+        
+        # 2. Identificăm coloana de P&L (am adăugat și 'Net P&L USD' în listă)
+        # Verificăm pe rând care variantă există în fișierul tău
+        if 'Net P&L USD' in df_combined.columns:
+            pnl_col = 'Net P&L USD'
+        elif 'Profit/Loss USD' in df_combined.columns:
+            pnl_col = 'Profit/Loss USD'
+        elif 'Profit/Loss' in df_combined.columns:
+            pnl_col = 'Profit/Loss'
+        else:
+            # Dacă nu găsește nimic, creăm o coloană cu 0 ca să nu crape codul
+            pnl_col = None
+            df_combined['Net P&L USD'] = 0
+            st.warning("Atenție: Nu am găsit nicio coloană de Profit/Loss!")
 
-        df_combined['Direction'] = df_combined['Type_y'].apply(get_direction)
-        df_combined['Hour'] = df_combined['Entry Time'].dt.hour
-        df_combined['Exit_Hour'] = df_combined['Exit Time'].dt.hour
-        df_combined['Year'] = df_combined['Entry Time'].dt.year
-        df_combined['Month'] = df_combined['Entry Time'].dt.month_name()
-        df_combined['Day'] = df_combined['Entry Time'].dt.day_name()
+        if pnl_col:
+            df_combined['Net P&L USD'] = pd.to_numeric(df_combined[pnl_col], errors='coerce').fillna(0)
+        
+        # 3. Rezultat (Win/Loss)
         df_combined['Result'] = df_combined['Net P&L USD'].apply(lambda x: 'Win' if x > 0 else 'Loss')
-        df_combined['Duration_Min'] = (df_combined['Exit Time'] - df_combined['Entry Time']).dt.total_seconds() / 60
 
-        def get_session(row_time):
-            pivot = datetime.strptime("15:30", "%H:%M").time()
-            return "Sesiunea 1" if row_time.time() < pivot else "Sesiunea 2"
-        df_combined['Session'] = df_combined['Entry Time'].apply(get_session)
+        # 4. Restul calculelor de timp
+        df_combined['Hour'] = df_combined['Entry Time'].dt.hour
+        df_combined['Minute'] = df_combined['Entry Time'].dt.minute
+        df_combined['Exit_Hour'] = df_combined['Exit Time'].dt.hour
+        df_combined['Exit_Minute'] = df_combined['Exit Time'].dt.minute
+        df_combined['Duration_Min'] = (df_combined['Exit Time'] - df_combined['Entry Time']).dt.total_seconds() / 60.0
+        df_combined['Day'] = df_combined['Entry Time'].dt.day_name()
+        df_combined['Month'] = df_combined['Entry Time'].dt.month_name()
+        df_combined['Year'] = df_combined['Entry Time'].dt.year
 
-        st.markdown("### 🔍 Filtrare Date")
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            all_years = sorted(df_combined['Year'].unique())
-            selected_years = st.multiselect("Anii:", all_years, default=all_years)
-        with c2:
-            m_order = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
-            avail_m = [m for m in m_order if m in df_combined['Month'].unique()]
-            selected_months = st.multiselect("Lunile:", avail_m, default=avail_m)
-        with c3:
-            d_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-            avail_d = [d for d in d_order if d in df_combined['Day'].unique()]
-            selected_days = st.multiselect("Zilele:", avail_d, default=avail_d)
-        with c4:
-            dirs = sorted(df_combined['Direction'].unique())
-            selected_dirs = st.multiselect("Direcții:", dirs, default=dirs)
+        # 5. Corecție pentru coloana 'Signal' (ca să nu dea eroare dacă lipsește)
+        if 'Signal' not in df_combined.columns:
+            df_combined['Signal'] = 'N/A'
+            
+        # Creare restul coloanelor necesare
+        df_combined['Result'] = df_combined['Net P&L USD'].apply(lambda x: 'Win' if x > 0 else 'Loss')
+        df_combined['Hour'] = df_combined['Entry Time'].dt.hour
+        df_combined['Minute'] = df_combined['Entry Time'].dt.minute
+        df_combined['Exit_Hour'] = df_combined['Exit Time'].dt.hour
+        df_combined['Exit_Minute'] = df_combined['Exit Time'].dt.minute
+        df_combined['Duration_Min'] = (df_combined['Exit Time'] - df_combined['Entry Time']).dt.total_seconds() / 60.0
+        df_combined['Day'] = df_combined['Entry Time'].dt.day_name()
+        df_combined['Month'] = df_combined['Entry Time'].dt.month_name()
+        df_combined['Year'] = df_combined['Entry Time'].dt.year
+        df_combined['Signal'] = df_combined['Signal'] if 'Signal' in df_combined.columns else ''
 
-        df_final = df_combined[(df_combined['Year'].isin(selected_years)) & 
-                            (df_combined['Month'].isin(selected_months)) & 
-                            (df_combined['Day'].isin(selected_days)) & 
-                            (df_combined['Direction'].isin(selected_dirs))]
-
-        tab_global, tab_s1, tab_s2 = st.tabs(["🌍 Global", "🌅 Sesiunea 1", "🌆 Sesiunea 2"])
-        with tab_global: render_full_analysis(df_final, "Global", [])
-        with tab_s1: render_full_analysis(df_final[df_final['Session'] == "Sesiunea 1"], "Sesiunea 1", [])
-        with tab_s2: render_full_analysis(df_final[df_final['Session'] == "Sesiunea 2"], "Sesiunea 2", [])
-
+        render_full_analysis(df_combined, "Toate Datele", [], df_combined)
+        
+        # --- BUTON DESCARCARE PDF ---
+        st.markdown("---")
+        st.markdown("<h3 style='text-align: center;'>📄 Exportă Raportul</h3>", unsafe_allow_html=True)
+        pdf_data = generate_pdf_report(df_combined)
+        col_btn1, col_btn2, col_btn3 = st.columns([2, 1, 2])
+        with col_btn2:
+            st.download_button(
+                label="📥 Descarcă Raport PDF",
+                data=pdf_data,
+                file_name="Raport_TradingView_Minute.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+            
     except Exception as e:
-        st.error(f"Eroare la procesarea fișierului: {e}")
+        st.error(f"Eroare la citirea sau procesarea datelor: {e}")
