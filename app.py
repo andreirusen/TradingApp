@@ -1,7 +1,5 @@
 import streamlit as st
 import pandas as pd
-import subprocess
-import sys
 from datetime import timedelta, datetime
 import io
 
@@ -9,13 +7,11 @@ import io
 try:
     import openpyxl
 except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl"])
     import openpyxl
 
 try:
     from fpdf import FPDF
 except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "fpdf2"])
     from fpdf import FPDF
 
 import plotly.express as px
