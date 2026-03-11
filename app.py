@@ -10,19 +10,18 @@ try:
 except ImportError:
     import openpyxl
 
-try:
-    from fpdf import FPDF
-except ImportError:
-    from fpdf import FPDF
-
 import plotly.express as px
 import plotly.graph_objects as go
+
+# PDF import
+from pdf_report import generate_full_pdf_report
 
 # 2. CONFIGURARE PAGINĂ ȘI DESIGN
 st.set_page_config(page_title="TradingView Payout & Strategy", page_icon="logo-lvlup.png", layout="wide")
 
 st.markdown("""
     <style>
+    /* ── GENERAL ── */
     .stApp { background-color: #0e1117; color: white; }
 
     .stat-card {
@@ -62,51 +61,69 @@ st.markdown("""
     .day-win { background-color: #0d2111; border-color: #00cf8d; }
     .day-loss { background-color: #210d0d; border-color: #cf0000; }
     .day-neutral { background-color: #161b22; opacity: 0.5; }
+
+    /* ── @MEDIA PRINT — Fix grafice tăiate ── */
+    @media print {
+        header[data-testid="stHeader"],
+        [data-testid="stToolbar"],
+        [data-testid="stDecoration"],
+        [data-testid="stStatusWidget"],
+        .stDownloadButton,
+        footer,
+        #MainMenu { display: none !important; }
+
+        .main .block-container {
+            max-width: 100% !important;
+            padding: 0.5cm 1cm !important;
+        }
+
+        /* Forțează graficele Plotly să nu fie tăiate */
+        .js-plotly-plot,
+        .plotly,
+        [data-testid="stPlotlyChart"],
+        .element-container:has(.js-plotly-plot) {
+            width: 100% !important;
+            max-width: 100% !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+            overflow: visible !important;
+        }
+
+        .js-plotly-plot svg,
+        .js-plotly-plot .main-svg {
+            width: 100% !important;
+            height: auto !important;
+            max-width: 100% !important;
+        }
+
+        [data-testid="column"],
+        [data-testid="stColumns"] {
+            break-inside: avoid !important;
+            page-break-inside: avoid !important;
+        }
+
+        .stat-card, .top-box, .bottom-box {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            color-adjust: exact !important;
+            page-break-inside: avoid !important;
+        }
+
+        [data-testid="stExpander"],
+        .element-container {
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+        }
+
+        table { font-size: 8pt !important; }
+
+        * {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
+    }
     </style>
     """, unsafe_allow_html=True)
-
-
-# --- FUNCȚIE GENERARE PDF ---
-def generate_pdf_report(df):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("helvetica", "B", 16)
-    pdf.cell(0, 10, "Raport Analiza Trading", ln=True, align="C")
-    pdf.ln(10)
-
-    total_pnl = df['Net P&L USD'].sum()
-    wins_count = len(df[df['Net P&L USD'] > 0])
-    losses_count = len(df[df['Net P&L USD'] < 0])
-    wr = (wins_count / len(df) * 100) if len(df) > 0 else 0
-
-    pdf.set_font("helvetica", "", 12)
-    pdf.cell(0, 10, f"Profit Total Net: ${total_pnl:,.2f}", ln=True)
-    pdf.cell(0, 10, f"Win Rate General: {wr:.1f}% ({wins_count}W / {losses_count}L)", ln=True)
-    pdf.cell(0, 10, f"Total Trades: {len(df)}", ln=True)
-
-    pdf.ln(5)
-    pdf.set_font("helvetica", "B", 14)
-    pdf.cell(0, 10, "Top 5 Minute de Intrare:", ln=True)
-    pdf.set_font("helvetica", "", 12)
-
-    if 'Minute' in df.columns:
-        min_stats = df.groupby('Minute').agg(Profit=('Net P&L USD', 'sum'), WR=('Result', lambda x: (len(x[x=='Win'])/len(x))*100 if len(x)>0 else 0), Total=('Result', 'count')).reset_index()
-        top_5 = min_stats[min_stats['Total']>0].sort_values(by=['WR', 'Profit'], ascending=False).head(5)
-        for _, r in top_5.iterrows():
-            pdf.cell(0, 10, f"Minutul xx:{int(r['Minute']):02d} -> Win Rate: {r['WR']:.1f}%, Profit: ${r['Profit']:,.2f}", ln=True)
-
-    pdf.ln(5)
-    pdf.set_font("helvetica", "B", 14)
-    pdf.cell(0, 10, "Top 5 Minute de Iesire:", ln=True)
-    pdf.set_font("helvetica", "", 12)
-
-    if 'Exit_Minute' in df.columns:
-        exit_min_stats = df.groupby('Exit_Minute').agg(Profit=('Net P&L USD', 'sum'), WR=('Result', lambda x: (len(x[x=='Win'])/len(x))*100 if len(x)>0 else 0), Total=('Result', 'count')).reset_index()
-        top_5_ex = exit_min_stats[exit_min_stats['Total']>0].sort_values(by=['WR', 'Profit'], ascending=False).head(5)
-        for _, r in top_5_ex.iterrows():
-            pdf.cell(0, 10, f"Minutul xx:{int(r['Exit_Minute']):02d} -> Win Rate: {r['WR']:.1f}%, Profit: ${r['Profit']:,.2f}", ln=True)
-
-    return bytes(pdf.output())
 
 
 # --- FUNCȚIE CALCUL PROBABILITĂȚI ȘIRURI ---
@@ -144,7 +161,6 @@ def get_streak_probabilities(df):
     return format_dict(win_streaks, "Win"), format_dict(loss_streaks, "Loss"), active_streak_label
 
 
-# --- FUNCȚIE CALCUL MAX STREAK ---
 def get_max_streaks(df):
     if df.empty: return 0, 0
     results = df.sort_values('Entry Time')['Result'].tolist()
@@ -152,17 +168,12 @@ def get_max_streaks(df):
     curr_win, curr_loss = 0, 0
     for r in results:
         if r == 'Win':
-            curr_win += 1
-            curr_loss = 0
-            max_win = max(max_win, curr_win)
+            curr_win += 1; curr_loss = 0; max_win = max(max_win, curr_win)
         else:
-            curr_loss += 1
-            curr_win = 0
-            max_loss = max(max_loss, curr_loss)
+            curr_loss += 1; curr_win = 0; max_loss = max(max_loss, curr_loss)
     return max_win, max_loss
 
 
-# --- FUNCȚIE SIMULARE FUNDED + TIMELINE PAYOUT ---
 def simulate_payout_timeline(df, num_accounts, payout_days):
     df_sorted = df.sort_values('Entry Time').copy()
     if df_sorted.empty: return 0.0, [], [0.0]*num_accounts
@@ -204,7 +215,6 @@ def simulate_payout_timeline(df, num_accounts, payout_days):
     return total_payout_sum, payout_cycles, account_balances
 
 
-# --- FUNCȚIE RENDER CALENDAR SĂPTĂMÂNAL ---
 def render_weekly_calendar(df, title_key):
     st.markdown("### 📅 Calendar Profit Săptămânal")
 
@@ -242,15 +252,11 @@ def render_weekly_calendar(df, title_key):
     st.markdown("---")
 
 
-# ============================================================
-# --- FUNCȚIE RISK MANAGEMENT (NOU) ---
-# ============================================================
 def render_risk_management(df):
     if df.empty:
         st.warning("Nu există date pentru Risk Management.")
         return
 
-    # Calcul automat din date
     wins = df[df['Result'] == 'Win']
     losses = df[df['Result'] == 'Loss']
     total = len(df)
@@ -266,7 +272,6 @@ def render_risk_management(df):
     st.markdown("## 💰 Risk Management")
     st.markdown("---")
 
-    # SECȚIUNEA 1: Statistici auto
     st.markdown("### 📊 Statistici Reale din Strategia Ta")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Win Rate", f"{win_rate*100:.1f}%")
@@ -275,7 +280,6 @@ def render_risk_management(df):
     c4.metric("Avg Loss", f"${avg_loss:,.2f}")
     st.markdown("---")
 
-    # SECȚIUNEA 2: Input manual
     st.markdown("### ⚙️ Configurare Manuală Cont")
     col_a, col_b, col_c, col_d = st.columns(4)
     with col_a:
@@ -309,21 +313,15 @@ def render_risk_management(df):
             </div>""", unsafe_allow_html=True)
     st.markdown("---")
 
-    # SECȚIUNEA 3: Kelly Criterion
     st.markdown("### 🎯 Kelly Criterion — Risc Optim per Trade")
 
-    # Limita maxima realista pentru funded accounts
-    FUNDED_MAX_RISK_PCT = 1.0  # 1% max per trade — standard industrie funded
-
+    FUNDED_MAX_RISK_PCT = 1.0
     kelly_pct = max(0, kelly) * 100
     half_kelly_pct = max(0, kelly_half) * 100
     quarter_kelly_pct = max(0, kelly / 4) * 100
-
-    # Riscul recomandat = minimul dintre Half Kelly și limita funded
     recommended_pct = min(half_kelly_pct, FUNDED_MAX_RISK_PCT)
     kelly_usd = account_size * (recommended_pct / 100)
 
-    # Notă informativă despre Kelly
     st.info(f"""
 📌 **Notă despre Kelly Criterion:** Formula matematică sugerează {half_kelly_pct:.1f}% (Half Kelly) bazat pe statisticile tale.
 Însă pentru **funded accounts**, riscul maxim recomandat per trade este **1%** din cauza regulilor stricte de drawdown.
@@ -367,7 +365,6 @@ Riscul afișat ca *Recomandat* ține cont de ambele.
 
     st.markdown("---")
 
-    # SECȚIUNEA 4: Fixed Fractional Risk
     st.markdown("### 📐 Fixed Fractional Risk — Comparație Scenarii")
     risk_scenarios = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
     scenario_data = []
@@ -377,14 +374,10 @@ Riscul afișat ca *Recomandat* ține cont de ambele.
         losses_before_overall = int(max_dd_usd / risk_usd) if risk_usd > 0 else 0
         estimated_daily_risk = risk_usd * max_trades_per_day
         daily_ok = "✅" if estimated_daily_risk <= daily_dd_usd else "❌"
-        if r == 1.0:
-            status = "✅ Recomandat funded"
-        elif r == 0.5:
-            status = "🛡️ Conservator"
-        elif r <= FUNDED_MAX_RISK_PCT:
-            status = "✅ Acceptabil"
-        else:
-            status = "⚠️ Agresiv pentru funded"
+        if r == 1.0: status = "✅ Recomandat funded"
+        elif r == 0.5: status = "🛡️ Conservator"
+        elif r <= FUNDED_MAX_RISK_PCT: status = "✅ Acceptabil"
+        else: status = "⚠️ Agresiv pentru funded"
         scenario_data.append({
             "Risc %": f"{r}%",
             "$ per Trade": f"${risk_usd:,.2f}",
@@ -406,19 +399,13 @@ Riscul afișat ca *Recomandat* ține cont de ambele.
     st.dataframe(df_scenarios.style.apply(highlight_recommended, axis=1), use_container_width=True, hide_index=True)
     st.markdown("---")
 
-    # SECȚIUNEA 5: Max Loss Streak Analysis
     st.markdown("### 📉 Max Loss Streak Analysis")
-
     results_list = df.sort_values('Entry Time')['Result'].tolist()
-
     max_win_s, max_loss_s = get_max_streaks(df)
-
     active_loss_streak = 0
     for r in reversed(results_list):
-        if r == 'Loss':
-            active_loss_streak += 1
-        else:
-            break
+        if r == 'Loss': active_loss_streak += 1
+        else: break
 
     col_s1, col_s2, col_s3 = st.columns(3)
     col_s1.metric("Max Loss Streak Istoric", f"{max_loss_s} trades")
@@ -426,10 +413,8 @@ Riscul afișat ca *Recomandat* ține cont de ambele.
     delta_label = "⚠️ Atenție!" if active_loss_streak >= max_loss_s * 0.7 else "✅ Normal"
     col_s3.metric("Streak Pierderi Activ Acum", f"{active_loss_streak} trades", delta=delta_label, delta_color="inverse")
 
-    # Impact financiar
     st.markdown("#### 💸 Impact Financiar — Streak de Pierderi pe Scenarii de Risc")
 
-    # Calculăm și max pierderi intr-o zi din date reale
     df_daily_loss = df.copy()
     df_daily_loss['Date'] = df_daily_loss['Entry Time'].dt.date
     daily_pnl = df_daily_loss.groupby('Date')['Net P&L USD'].sum()
@@ -473,31 +458,25 @@ Riscul afișat ca *Recomandat* ține cont de ambele.
 
     st.dataframe(df_streak_impact.style.apply(highlight_survived, axis=1), use_container_width=True, hide_index=True)
 
-    # Grafic distribuție loss streaks
     streak_counts = {}
     curr = 0
     for r in results_list:
-        if r == 'Loss':
-            curr += 1
+        if r == 'Loss': curr += 1
         else:
-            if curr > 0:
-                streak_counts[curr] = streak_counts.get(curr, 0) + 1
+            if curr > 0: streak_counts[curr] = streak_counts.get(curr, 0) + 1
             curr = 0
-    if curr > 0:
-        streak_counts[curr] = streak_counts.get(curr, 0) + 1
+    if curr > 0: streak_counts[curr] = streak_counts.get(curr, 0) + 1
 
     if streak_counts:
         df_streak_dist = pd.DataFrame(list(streak_counts.items()), columns=['Streak Lungime', 'Frecvență']).sort_values('Streak Lungime')
         fig_streak = px.bar(df_streak_dist, x='Streak Lungime', y='Frecvență',
                             title="Distribuție Loss Streaks (câte ori a apărut fiecare lungime)",
-                            template="plotly_dark", color='Frecvență',
-                            color_continuous_scale='Reds')
+                            template="plotly_dark", color='Frecvență', color_continuous_scale='Reds')
         fig_streak.update_layout(xaxis=dict(tickmode='linear', dtick=1))
         st.plotly_chart(fig_streak, use_container_width=True, key="loss_streak_dist_rm")
 
     st.markdown("---")
 
-    # Sumar final
     worst_case_loss = kelly_usd * max_loss_s
     worst_case_daily = kelly_usd * max_trades_per_day
     is_safe_overall = worst_case_loss <= max_dd_usd
@@ -518,10 +497,6 @@ Riscul afișat ca *Recomandat* ține cont de ambele.
         </div>""", unsafe_allow_html=True)
 
 
-
-# ============================================================
-# --- FUNCȚIE MONTE CARLO (TAB SEPARAT) ---
-# ============================================================
 def render_monte_carlo(df):
     if df.empty:
         st.warning("Nu există date pentru Monte Carlo.")
@@ -531,7 +506,6 @@ def render_monte_carlo(df):
     st.markdown("Amestecă aleator ordinea trade-urilor tale de **N ori** și arată distribuția posibilelor outcome-uri reale.")
     st.markdown("---")
 
-    # Configurare cont (duplicate din Risk Management pentru independență)
     st.markdown("### ⚙️ Configurare")
     mc_c1, mc_c2, mc_c3, mc_c4, mc_c5 = st.columns(5)
     with mc_c1:
@@ -560,53 +534,30 @@ def render_monte_carlo(df):
     if st.button("▶️ Rulează Simularea Monte Carlo", key="mc_run2", use_container_width=True):
         pnl_values = df['Net P&L USD'].values
         normalized = np.where(pnl_values > 0, 1.0, -1.0)
-
         all_curves = []
         final_balances = []
         blown_daily_count = 0
         blown_overall_count = 0
         survived_count = 0
-
         np.random.seed(None)
         progress = st.progress(0, text="Simulare în curs...")
 
         for i in range(n_simulations):
             sampled = np.random.choice(normalized, size=n_trades_sim, replace=True)
-            balance = 0.0
-            daily_balance = 0.0
-            blown = False
-            blown_by = None
-            curve = [0.0]
-
+            balance = 0.0; daily_balance = 0.0; blown = False; blown_by = None; curve = [0.0]
             for j, outcome in enumerate(sampled):
                 pnl = outcome * mc_risk_usd
-                balance += pnl
-                daily_balance += pnl
-
-                if (j + 1) % mc_trades_per_day == 0:
-                    daily_balance = 0.0
-
-                if daily_balance <= -mc_daily_dd_usd:
-                    blown = True
-                    blown_by = 'daily'
-                    break
-                if balance <= -mc_overall_dd_usd:
-                    blown = True
-                    blown_by = 'overall'
-                    break
-
+                balance += pnl; daily_balance += pnl
+                if (j + 1) % mc_trades_per_day == 0: daily_balance = 0.0
+                if daily_balance <= -mc_daily_dd_usd: blown = True; blown_by = 'daily'; break
+                if balance <= -mc_overall_dd_usd: blown = True; blown_by = 'overall'; break
                 curve.append(balance)
-
             all_curves.append(curve)
             final_balances.append(balance)
             if blown:
-                if blown_by == 'daily':
-                    blown_daily_count += 1
-                else:
-                    blown_overall_count += 1
-            else:
-                survived_count += 1
-
+                if blown_by == 'daily': blown_daily_count += 1
+                else: blown_overall_count += 1
+            else: survived_count += 1
             if (i + 1) % 50 == 0:
                 progress.progress((i + 1) / n_simulations, text=f"Simulare în curs... {i+1}/{n_simulations}")
 
@@ -622,7 +573,6 @@ def render_monte_carlo(df):
         best_final = float(np.max(final_balances))
         worst_final = float(np.min(final_balances))
 
-        # ── Metrici principale ──
         res_c1, res_c2, res_c3, res_c4 = st.columns(4)
         with res_c1:
             color = "#00cf8d" if survival_rate >= 70 else "#ffa500" if survival_rate >= 50 else "#ff4b4b"
@@ -656,17 +606,12 @@ def render_monte_carlo(df):
             </div>""", unsafe_allow_html=True)
 
         st.write("")
-
-        # ── Grafic equity curves ──
         fig_mc = go.Figure()
         for idx, curve in enumerate(all_curves[:300]):
             is_blown = len(curve) < n_trades_sim + 1
-            fig_mc.add_trace(go.Scatter(
-                y=curve,
-                mode='lines',
+            fig_mc.add_trace(go.Scatter(y=curve, mode='lines',
                 line=dict(color='rgba(255,75,75,0.07)' if is_blown else 'rgba(0,207,141,0.05)', width=1),
-                showlegend=False, hoverinfo='skip'
-            ))
+                showlegend=False, hoverinfo='skip'))
 
         max_len = max(len(c) for c in all_curves)
         padded = [c + [c[-1]] * (max_len - len(c)) for c in all_curves]
@@ -674,17 +619,13 @@ def render_monte_carlo(df):
         p25_curve = np.percentile(padded, 25, axis=0)
         p75_curve = np.percentile(padded, 75, axis=0)
 
-        # Zona P25-P75
         fig_mc.add_trace(go.Scatter(
             y=list(p75_curve) + list(p25_curve[::-1]),
             x=list(range(len(p75_curve))) + list(range(len(p25_curve)-1, -1, -1)),
             fill='toself', fillcolor='rgba(0,207,141,0.08)',
-            line=dict(color='rgba(0,0,0,0)'), showlegend=True, name='Zona P25-P75'
-        ))
-        fig_mc.add_trace(go.Scatter(
-            y=median_curve, mode='lines',
-            line=dict(color='#00cf8d', width=2.5), name='Median'
-        ))
+            line=dict(color='rgba(0,0,0,0)'), showlegend=True, name='Zona P25-P75'))
+        fig_mc.add_trace(go.Scatter(y=median_curve, mode='lines',
+            line=dict(color='#00cf8d', width=2.5), name='Median'))
         fig_mc.add_hline(y=0, line_dash="dash", line_color="#555", opacity=0.6)
         fig_mc.add_hline(y=-mc_daily_dd_usd, line_dash="dot", line_color="#ffa500",
                          opacity=0.9, annotation_text=f"Daily DD -{mc_daily_dd}%", annotation_position="bottom right")
@@ -693,12 +634,9 @@ def render_monte_carlo(df):
         fig_mc.update_layout(
             title=f"Monte Carlo — {n_simulations} Simulări | {mc_risk_pct}% risc | {n_trades_sim} trades",
             template="plotly_dark", xaxis_title="Trade #", yaxis_title="P&L ($)",
-            height=500, margin=dict(t=50, b=40, l=0, r=130),
-            legend=dict(orientation="h", y=1.02)
-        )
+            height=500, margin=dict(t=50, b=40, l=0, r=130), legend=dict(orientation="h", y=1.02))
         st.plotly_chart(fig_mc, use_container_width=True, key="mc_equity_curves2")
 
-        # ── Histogramă profit final ──
         colors_hist = ['#00cf8d' if x >= 0 else '#ff4b4b' for x in final_balances]
         fig_hist = go.Figure()
         fig_hist.add_trace(go.Histogram(x=final_balances, nbinsx=60,
@@ -708,82 +646,19 @@ def render_monte_carlo(df):
                            annotation_text=f"Median ${median_final:,.0f}", annotation_position="top right")
         fig_hist.add_vline(x=p10_final, line_dash="dot", line_color="#ffa500", opacity=0.7,
                            annotation_text=f"P10 ${p10_final:,.0f}", annotation_position="top left")
-        fig_hist.update_layout(
-            title=f"Distribuție Profit Final după {n_trades_sim} Trades",
+        fig_hist.update_layout(title=f"Distribuție Profit Final după {n_trades_sim} Trades",
             template="plotly_dark", xaxis_title="Profit Final ($)", yaxis_title="Frecvență",
-            height=320, margin=dict(t=50, b=40, l=0, r=0)
-        )
+            height=320, margin=dict(t=50, b=40, l=0, r=0))
         st.plotly_chart(fig_hist, use_container_width=True, key="mc_hist2")
 
-        # ── Tabel statistici complete ──
-        st.markdown("#### 📋 Statistici Complete Simulare")
-        stat_col1, stat_col2 = st.columns(2)
-        with stat_col1:
-            st.markdown(f"""
-            <div style="background:#161b22; border:1px solid #30363d; border-radius:10px; padding:15px;">
-                <h5 style="color:#00cf8d; margin-top:0;">Distribuție Profit Final</h5>
-                <div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #333;">
-                    <span>Best case (P100)</span><span style="color:#00cf8d; font-weight:bold;">${best_final:,.0f}</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #333;">
-                    <span>P90 (top 10%)</span><span style="color:#00cf8d;">${p90_final:,.0f}</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #333;">
-                    <span>P75</span><span style="color:#4a9eff;">${p75_final:,.0f}</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #333; font-weight:bold;">
-                    <span>Median (P50)</span><span style="color:#fff;">${median_final:,.0f}</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #333;">
-                    <span>P25</span><span style="color:#ffa500;">${p25_final:,.0f}</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #333;">
-                    <span>P10 (worst 10%)</span><span style="color:#ff4b4b;">${p10_final:,.0f}</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; padding:4px 0;">
-                    <span>Worst case (P0)</span><span style="color:#ff4b4b; font-weight:bold;">${worst_final:,.0f}</span>
-                </div>
-            </div>""", unsafe_allow_html=True)
-        with stat_col2:
-            st.markdown(f"""
-            <div style="background:#161b22; border:1px solid #30363d; border-radius:10px; padding:15px;">
-                <h5 style="color:#00cf8d; margin-top:0;">Risc & Supraviețuire</h5>
-                <div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #333;">
-                    <span>Supraviețuire totală</span><span style="color:#00cf8d; font-weight:bold;">{survival_rate:.1f}%</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #333;">
-                    <span>Blown pe Daily DD</span><span style="color:#ffa500;">{blown_daily_count} runs ({blown_daily_count/n_simulations*100:.1f}%)</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #333;">
-                    <span>Blown pe Overall DD</span><span style="color:#ff4b4b;">{blown_overall_count} runs ({blown_overall_count/n_simulations*100:.1f}%)</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #333;">
-                    <span>Risc per trade</span><span style="color:#fff;">{mc_risk_pct}% = ${mc_risk_usd:,.2f}</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #333;">
-                    <span>Daily DD limit</span><span style="color:#ffa500;">{mc_daily_dd}% = ${mc_daily_dd_usd:,.2f}</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; padding:4px 0;">
-                    <span>Overall DD limit</span><span style="color:#ff4b4b;">{mc_overall_dd}% = ${mc_overall_dd_usd:,.2f}</span>
-                </div>
-            </div>""", unsafe_allow_html=True)
-
-        st.write("")
-        if survival_rate >= 80:
-            st.success("🟢 **Excelent** — strategia ta este foarte robustă la acest nivel de risc. Poți continua cu încredere.")
-        elif survival_rate >= 60:
-            st.warning("🟡 **Acceptabil** — strategia supraviețuiește în majoritatea scenariilor, dar există risc real de blown.")
-        elif survival_rate >= 40:
-            st.warning("🟠 **Riscant** — aproape jumătate din simulări ating limitele DD. Consideră reducerea riscului la 0.5%.")
-        else:
-            st.error("🔴 **Periculos** — majoritatea simulărilor blow contul. Risc prea mare pentru funded accounts.")
+        if survival_rate >= 80: st.success("🟢 **Excelent** — strategia ta este foarte robustă la acest nivel de risc.")
+        elif survival_rate >= 60: st.warning("🟡 **Acceptabil** — strategia supraviețuiește în majoritatea scenariilor, dar există risc real de blown.")
+        elif survival_rate >= 40: st.warning("🟠 **Riscant** — aproape jumătate din simulări ating limitele DD. Consideră reducerea riscului la 0.5%.")
+        else: st.error("🔴 **Periculos** — majoritatea simulărilor blow contul. Risc prea mare pentru funded accounts.")
     else:
         st.info("👆 Configurează parametrii de mai sus și apasă **▶️ Rulează** pentru a vedea simularea.")
 
 
-# ============================================================
-# --- FUNCȚIE ANALIZE AVANSATE (Overtrading + Correlații + Benchmark) ---
-# ============================================================
 def render_advanced_analysis(df):
     if df.empty:
         st.warning("Nu există date pentru Analize Avansate.")
@@ -792,28 +667,23 @@ def render_advanced_analysis(df):
     st.markdown("## 🔬 Analize Avansate")
     st.markdown("---")
 
-    # ── 1. DETECȚIE OVERTRADING ──────────────────────────────
     st.markdown("### ⚠️ Detecție Overtrading")
     st.markdown("Analizează dacă zilele cu **mai multe trade-uri** au rezultate mai slabe — semn de overtrading.")
 
     df_ot = df.copy()
     df_ot['Date'] = df_ot['Entry Time'].dt.date
     daily_agg = df_ot.groupby('Date').agg(
-        Trades=('Net P&L USD', 'count'),
-        PnL=('Net P&L USD', 'sum'),
+        Trades=('Net P&L USD', 'count'), PnL=('Net P&L USD', 'sum'),
         Wins=('Result', lambda x: (x == 'Win').sum()),
         WR=('Result', lambda x: (x == 'Win').sum() / len(x) * 100)
     ).reset_index()
 
-    # Grupăm zilele după numărul de trades
     bins = [0, 1, 2, 3, 5, 100]
     labels = ['1 trade', '2 trades', '3 trades', '4-5 trades', '6+ trades']
     daily_agg['Grup'] = pd.cut(daily_agg['Trades'], bins=bins, labels=labels)
     grup_stats = daily_agg.groupby('Grup', observed=True).agg(
-        Zile=('Date', 'count'),
-        WR_Med=('WR', 'mean'),
-        PnL_Med=('PnL', 'median'),
-        PnL_Total=('PnL', 'sum')
+        Zile=('Date', 'count'), WR_Med=('WR', 'mean'),
+        PnL_Med=('PnL', 'median'), PnL_Total=('PnL', 'sum')
     ).reset_index().dropna()
 
     if not grup_stats.empty:
@@ -825,40 +695,31 @@ def render_advanced_analysis(df):
         fig_ot.update_layout(height=380, margin=dict(t=50,b=40,l=0,r=0), yaxis_title="Win Rate (%)")
         st.plotly_chart(fig_ot, use_container_width=True, key="overtrading_bar")
 
-        # Scatterplot zile individuale
-        fig_scatter = px.scatter(daily_agg, x='Trades', y='PnL', color='WR',
-            color_continuous_scale='RdYlGn', template='plotly_dark',
-            title='Profit per Zi vs Număr de Trades (fiecare punct = o zi)',
-            labels={'Trades': 'Nr. Trades în zi', 'PnL': 'Profit Zi ($)', 'WR': 'Win Rate %'},
-            hover_data={'Date': True, 'Trades': True, 'PnL': ':.2f', 'WR': ':.1f'})
-        fig_scatter.add_hline(y=0, line_dash="dash", line_color="#555")
-        # Linie de trend
         if len(daily_agg) > 3:
+            fig_scatter = px.scatter(daily_agg, x='Trades', y='PnL', color='WR',
+                color_continuous_scale='RdYlGn', template='plotly_dark',
+                title='Profit per Zi vs Număr de Trades (fiecare punct = o zi)',
+                labels={'Trades': 'Nr. Trades în zi', 'PnL': 'Profit Zi ($)', 'WR': 'Win Rate %'},
+                hover_data={'Date': True, 'Trades': True, 'PnL': ':.2f', 'WR': ':.1f'})
+            fig_scatter.add_hline(y=0, line_dash="dash", line_color="#555")
             z = np.polyfit(daily_agg['Trades'], daily_agg['PnL'], 1)
             p = np.poly1d(z)
             x_line = np.linspace(daily_agg['Trades'].min(), daily_agg['Trades'].max(), 50)
             trend_color = '#ff4b4b' if z[0] < 0 else '#00cf8d'
             fig_scatter.add_trace(go.Scatter(x=x_line, y=p(x_line), mode='lines',
                 line=dict(color=trend_color, width=2, dash='dot'), name='Trend'))
-        fig_scatter.update_layout(height=380, margin=dict(t=50,b=40,l=0,r=0))
-        st.plotly_chart(fig_scatter, use_container_width=True, key="overtrading_scatter")
+            fig_scatter.update_layout(height=380, margin=dict(t=50,b=40,l=0,r=0))
+            st.plotly_chart(fig_scatter, use_container_width=True, key="overtrading_scatter")
 
-        # Concluzie automată
         if len(grup_stats) >= 2:
             wr_1 = grup_stats.iloc[0]['WR_Med']
             wr_last = grup_stats.iloc[-1]['WR_Med']
-            if wr_last < wr_1 - 10:
-                st.error(f"🔴 **Overtrading detectat** — Win Rate scade de la **{wr_1:.0f}%** (1 trade/zi) la **{wr_last:.0f}%** (zile aglomerate). Limitează-te la mai puține trades pe zi!")
-            elif wr_last < wr_1 - 5:
-                st.warning(f"🟡 **Posibil overtrading** — Win Rate ușor mai mic în zilele cu multe trades ({wr_1:.0f}% → {wr_last:.0f}%). Monitorizează.")
-            else:
-                st.success(f"🟢 **Fără semne de overtrading** — performanța rămâne constantă indiferent de numărul de trades/zi.")
+            if wr_last < wr_1 - 10: st.error(f"🔴 **Overtrading detectat** — Win Rate scade de la **{wr_1:.0f}%** la **{wr_last:.0f}%**.")
+            elif wr_last < wr_1 - 5: st.warning(f"🟡 **Posibil overtrading** — Win Rate ușor mai mic în zilele cu multe trades ({wr_1:.0f}% → {wr_last:.0f}%).")
+            else: st.success(f"🟢 **Fără semne de overtrading** — performanța rămâne constantă indiferent de numărul de trades/zi.")
 
     st.markdown("---")
-
-    # ── 2. CORRELAȚII ÎNTRE TRADE-URI ────────────────────────
     st.markdown("### 🔗 Correlații între Trade-uri Consecutive")
-    st.markdown("Analizează dacă rezultatul unui trade influențează probabilitatea trade-ului următor — **mean reversion vs momentum**.")
 
     df_corr = df.sort_values('Entry Time').copy()
     df_corr['Result_Bin'] = (df_corr['Result'] == 'Win').astype(int)
@@ -866,7 +727,6 @@ def render_advanced_analysis(df):
     df_corr['Prev_Result'] = df_corr['Result_Bin'].shift(1)
     df_corr = df_corr.dropna(subset=['Next_Result', 'Prev_Result'])
 
-    # Matricea de tranziție
     ww = len(df_corr[(df_corr['Result_Bin'] == 1) & (df_corr['Next_Result'] == 1)])
     wl = len(df_corr[(df_corr['Result_Bin'] == 1) & (df_corr['Next_Result'] == 0)])
     lw = len(df_corr[(df_corr['Result_Bin'] == 0) & (df_corr['Next_Result'] == 1)])
@@ -902,30 +762,21 @@ def render_advanced_analysis(df):
         </div>""", unsafe_allow_html=True)
 
     st.write("")
-
-    # Heatmap matrice tranzitii
-    matrix = np.array([[p_win_after_loss, 100-p_win_after_loss],
-                        [p_win_after_win, 100-p_win_after_win]])
+    matrix = np.array([[p_win_after_loss, 100-p_win_after_loss], [p_win_after_win, 100-p_win_after_win]])
     fig_heat = go.Figure(data=go.Heatmap(
         z=matrix, x=['→ Win', '→ Loss'], y=['After Loss', 'After Win'],
         colorscale='RdYlGn', zmin=0, zmax=100,
         text=[[f"{matrix[i][j]:.1f}%" for j in range(2)] for i in range(2)],
-        texttemplate="%{text}", textfont={"size": 18},
-    ))
+        texttemplate="%{text}", textfont={"size": 18}))
     fig_heat.update_layout(title="Matricea de Tranziție Win/Loss (%)",
         template="plotly_dark", height=280, margin=dict(t=50,b=40,l=80,r=0))
     st.plotly_chart(fig_heat, use_container_width=True, key="transition_matrix")
 
-    # Concluzie automată
     diff = p_win_after_loss - p_win_after_win
-    if abs(diff) < 3:
-        st.success(f"🟢 **Trades independente** — rezultatele sunt aleatorii, fără pattern de momentum sau mean reversion. Win rate stabil după Win ({p_win_after_win:.1f}%) și Loss ({p_win_after_loss:.1f}%).")
-    elif diff > 3:
-        st.info(f"🔵 **Mean Reversion detectat** — după o pierdere ai mai multe șanse de win ({p_win_after_loss:.1f}% vs {p_win_after_win:.1f}%). Strategia ta se 'recuperează' după loss-uri.")
-    else:
-        st.warning(f"🟡 **Momentum detectat** — win-urile tind să fie urmate de alte win-uri ({p_win_after_win:.1f}% vs {p_win_after_loss:.1f}%). Atenție la reversal-uri după streak-uri lungi!")
+    if abs(diff) < 3: st.success(f"🟢 **Trades independente** — Win rate stabil după Win ({p_win_after_win:.1f}%) și Loss ({p_win_after_loss:.1f}%).")
+    elif diff > 3: st.info(f"🔵 **Mean Reversion detectat** — după o pierdere ai mai multe șanse de win ({p_win_after_loss:.1f}% vs {p_win_after_win:.1f}%).")
+    else: st.warning(f"🟡 **Momentum detectat** — win-urile tind să fie urmate de alte win-uri ({p_win_after_win:.1f}% vs {p_win_after_loss:.1f}%).")
 
-    # Autocorrelație pe serii de PnL
     if len(df_corr) >= 20:
         pnl_series = df_corr['Net P&L USD'].values
         lags = range(1, min(11, len(pnl_series)//2))
@@ -941,35 +792,28 @@ def render_advanced_analysis(df):
         st.plotly_chart(fig_ac, use_container_width=True, key="autocorr_bar")
 
     st.markdown("---")
-
-    # ── 3. BENCHMARK vs BUY & HOLD ───────────────────────────
     st.markdown("### 📊 Benchmark vs Buy & Hold SPY")
-    st.markdown("Compară equity curve-ul tău cu o strategie pasivă de **Buy & Hold** pe același interval de timp.")
 
     bench_col1, bench_col2 = st.columns(2)
     with bench_col1:
         bench_capital = st.number_input("Capital inițial ($):", min_value=1000, max_value=500000, value=25000, step=1000, key="bench_cap")
     with bench_col2:
-        spy_annual_return = st.slider("Return anual estimat SPY (%):", 5, 20, 10, help="SPY a avut ~10% anual pe termen lung. Poți ajusta după perioada ta.")
+        spy_annual_return = st.slider("Return anual estimat SPY (%):", 5, 20, 10)
 
     df_bench = df.sort_values('Entry Time').copy()
     df_bench['Cumulative_PnL'] = df_bench['Net P&L USD'].cumsum()
-
-    # Calculăm Buy & Hold pe același interval
     start_date = df_bench['Entry Time'].min()
     end_date = df_bench['Entry Time'].max()
     days_total = (end_date - start_date).days if (end_date - start_date).days > 0 else 1
     daily_return = (1 + spy_annual_return / 100) ** (1/365) - 1
-
-    # Generăm curba SPY zilnic
     date_range = pd.date_range(start=start_date, end=end_date, freq='D')
     spy_values = [bench_capital * ((1 + daily_return) ** i) - bench_capital for i in range(len(date_range))]
     df_spy = pd.DataFrame({'Date': date_range, 'SPY_PnL': spy_values})
 
-    # Profit final comparat
     strategy_final = df_bench['Cumulative_PnL'].iloc[-1] if len(df_bench) > 0 else 0
     spy_final = bench_capital * ((1 + spy_annual_return / 100) ** (days_total / 365)) - bench_capital
     spy_annual_pnl_pct = (strategy_final / bench_capital * 100) / (days_total / 365) if days_total > 0 else 0
+    diff_vs_spy = strategy_final - spy_final
 
     bench_m1, bench_m2, bench_m3, bench_m4 = st.columns(4)
     with bench_m1:
@@ -988,7 +832,6 @@ def render_advanced_analysis(df):
             <p style="margin:0; font-size:11px; color:#888;">{spy_annual_return}%/an × {days_total/365:.1f} ani</p>
         </div>""", unsafe_allow_html=True)
     with bench_m3:
-        diff_vs_spy = strategy_final - spy_final
         d_color = "#00cf8d" if diff_vs_spy >= 0 else "#ff4b4b"
         st.markdown(f"""<div style="background:#161b22; border:1px solid {d_color}; border-left:5px solid {d_color};
             border-radius:10px; padding:12px; text-align:center;">
@@ -1005,40 +848,23 @@ def render_advanced_analysis(df):
         </div>""", unsafe_allow_html=True)
 
     st.write("")
-
-    # Grafic comparat
     fig_bench = go.Figure()
-    fig_bench.add_trace(go.Scatter(
-        x=df_spy['Date'], y=df_spy['SPY_PnL'],
-        mode='lines', name=f'SPY Buy&Hold ({spy_annual_return}%/an)',
-        line=dict(color='#4a9eff', width=2, dash='dot')
-    ))
-    fig_bench.add_trace(go.Scatter(
-        x=df_bench['Entry Time'], y=df_bench['Cumulative_PnL'],
-        mode='lines', name='Strategia Ta',
-        line=dict(color='#00cf8d', width=2.5)
-    ))
+    fig_bench.add_trace(go.Scatter(x=df_spy['Date'], y=df_spy['SPY_PnL'], mode='lines',
+        name=f'SPY Buy&Hold ({spy_annual_return}%/an)', line=dict(color='#4a9eff', width=2, dash='dot')))
+    fig_bench.add_trace(go.Scatter(x=df_bench['Entry Time'], y=df_bench['Cumulative_PnL'], mode='lines',
+        name='Strategia Ta', line=dict(color='#00cf8d', width=2.5)))
     fig_bench.add_hline(y=0, line_dash="dash", line_color="#555", opacity=0.5)
-    fig_bench.update_layout(
-        title="Equity Curve: Strategia Ta vs SPY Buy & Hold",
+    fig_bench.update_layout(title="Equity Curve: Strategia Ta vs SPY Buy & Hold",
         template="plotly_dark", xaxis_title="Data", yaxis_title="Profit ($)",
-        height=420, margin=dict(t=50,b=40,l=0,r=0),
-        legend=dict(orientation="h", y=1.02)
-    )
+        height=420, margin=dict(t=50,b=40,l=0,r=0), legend=dict(orientation="h", y=1.02))
     st.plotly_chart(fig_bench, use_container_width=True, key="benchmark_chart")
 
-    # Concluzie
-    if strategy_final > spy_final * 1.5:
-        st.success(f"🏆 **Excelent** — strategia ta generează de **{strategy_final/spy_final:.1f}x** mai mult decât SPY Buy & Hold pe același interval!")
-    elif strategy_final > spy_final:
-        st.success(f"✅ **Bine** — strategia ta bate SPY cu **${diff_vs_spy:,.0f}** în plus. Activitate ta de trading aduce valoare.")
-    elif strategy_final > 0:
-        st.warning(f"🟡 **Sub benchmark** — ești profitabil, dar SPY Buy & Hold ar fi dat mai mult (${spy_final:,.0f} vs ${strategy_final:,.0f}). Merită evaluat dacă efortul trading-ului merită față de o strategie pasivă.")
-    else:
-        st.error(f"🔴 **Underperformance** — strategia ta este în pierdere în timp ce SPY ar fi dat +${spy_final:,.0f}.")
+    if strategy_final > spy_final * 1.5: st.success(f"🏆 **Excelent** — strategia ta generează de **{strategy_final/spy_final:.1f}x** mai mult decât SPY!")
+    elif strategy_final > spy_final: st.success(f"✅ **Bine** — strategia ta bate SPY cu **${diff_vs_spy:,.0f}** în plus.")
+    elif strategy_final > 0: st.warning(f"🟡 **Sub benchmark** — ești profitabil, dar SPY Buy & Hold ar fi dat mai mult (${spy_final:,.0f} vs ${strategy_final:,.0f}).")
+    else: st.error(f"🔴 **Underperformance** — strategia ta este în pierdere în timp ce SPY ar fi dat +${spy_final:,.0f}.")
 
 
-# --- FUNCȚIE RENDER ANALIZĂ COMPLETĂ ---
 def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None):
     if df.empty:
         st.warning(f"Nu există date pentru {title_prefix}.")
@@ -1051,7 +877,6 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
     pos_profit = df[df['Net P&L USD'] > 0]['Net P&L USD'].sum()
     neg_loss = abs(df[df['Net P&L USD'] < 0]['Net P&L USD'].sum())
     pf = pos_profit / neg_loss if neg_loss > 0 else pos_profit
-
     avg_win = df[df['Net P&L USD'] > 0]['Net P&L USD'].mean() if wins_count > 0 else 0
     avg_loss = abs(df[df['Net P&L USD'] < 0]['Net P&L USD'].mean()) if losses_count > 0 else 0
     rr_ratio = avg_win / avg_loss if avg_loss > 0 else avg_win
@@ -1093,23 +918,15 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
     with r3_c3:
         longs = df[df['Direction'] == 'Long']
         shorts = df[df['Direction'] == 'Short']
-        l_w = len(longs[longs['Net P&L USD'] > 0])
-        l_l = len(longs[longs['Net P&L USD'] < 0])
-        s_w = len(shorts[shorts['Net P&L USD'] > 0])
-        s_l = len(shorts[shorts['Net P&L USD'] < 0])
-        st.markdown(f"""
-        <div class="stat-card">
-            <div class="stat-label">Trade Direction</div>
+        l_w = len(longs[longs['Net P&L USD'] > 0]); l_l = len(longs[longs['Net P&L USD'] < 0])
+        s_w = len(shorts[shorts['Net P&L USD'] > 0]); s_l = len(shorts[shorts['Net P&L USD'] < 0])
+        st.markdown(f"""<div class="stat-card"><div class="stat-label">Trade Direction</div>
             <div style="display: flex; justify-content: space-between; font-size:14px;">
-                <span>🔼 <strong>Long:</strong> {len(longs)}</span>
-                <span style="color:#aaa;">({l_w}W / {l_l}L)</span>
+                <span>🔼 <strong>Long:</strong> {len(longs)}</span><span style="color:#aaa;">({l_w}W / {l_l}L)</span>
             </div>
             <div style="display: flex; justify-content: space-between; margin-top: 5px; font-size:14px;">
-                <span>🔽 <strong>Short:</strong> {len(shorts)}</span>
-                <span style="color:#aaa;">({s_w}W / {s_l}L)</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+                <span>🔽 <strong>Short:</strong> {len(shorts)}</span><span style="color:#aaa;">({s_w}W / {s_l}L)</span>
+            </div></div>""", unsafe_allow_html=True)
     st.write("")
 
     r4_c1, r4_c2, r4_c3 = st.columns(3)
@@ -1118,17 +935,13 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
     with r4_c2:
         st.markdown(f"<div class='stat-card'><div class='stat-label'>Max Loss Streak</div><div class='stat-value' style='color:#ff4b4b'>{max_loss_streak} losses</div></div>", unsafe_allow_html=True)
     with r4_c3:
-        st.markdown(f"""
-        <div class="stat-card">
-            <div class="stat-label">Best / Worst Trade</div>
+        st.markdown(f"""<div class="stat-card"><div class="stat-label">Best / Worst Trade</div>
             <div style="display: flex; justify-content: space-between; font-size:14px; margin-top:4px;">
                 <span>🏆 Best:</span><span style="color:#00cf8d; font-weight:bold;">${best_trade:,.2f}</span>
             </div>
             <div style="display: flex; justify-content: space-between; font-size:14px; margin-top:4px;">
                 <span>💀 Worst:</span><span style="color:#ff4b4b; font-weight:bold;">${worst_trade:,.2f}</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+            </div></div>""", unsafe_allow_html=True)
 
     st.markdown("---")
     st.subheader(f"💰 Analiză Cicluri Payout — {title_prefix}")
@@ -1155,9 +968,7 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
                     <h3 style="margin:0; color:#ff4b4b; font-size:24px; text-align: center;">${max_dd_global:,.2f}</h3>
                 </div>
                 <p style="margin:0; font-size:13px; opacity:0.5;">{len(cycles) if cycles else 0} cicluri identificate</p>
-            </div>
-        """, unsafe_allow_html=True)
-
+            </div>""", unsafe_allow_html=True)
     with col_balance:
         with st.container(height=260):
             st.write("**Balanță Curentă Conturi:**")
@@ -1306,8 +1117,7 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
 
         def fmt_dur(minutes):
             if pd.isna(minutes) or minutes == 0: return "N/A"
-            h = int(minutes // 60)
-            m = int(minutes % 60)
+            h = int(minutes // 60); m = int(minutes % 60)
             return f"{h}h {m}m" if h > 0 else f"{m}m"
 
         dur_c1, dur_c2, dur_c3, dur_c4 = st.columns(4)
@@ -1327,13 +1137,11 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
         st.write("")
         df_dur_plot = df[['Duration_Min', 'Result']].dropna()
         if not df_dur_plot.empty:
-            fig_dur = px.histogram(
-                df_dur_plot, x='Duration_Min', color='Result',
+            fig_dur = px.histogram(df_dur_plot, x='Duration_Min', color='Result',
                 color_discrete_map={'Win': '#00cf8d', 'Loss': '#ff4b4b'},
                 nbins=30, template='plotly_dark',
                 labels={'Duration_Min': 'Durată (minute)', 'count': 'Nr. Trades'},
-                title='Distribuție Durată Trade-uri (Win vs Loss)'
-            )
+                title='Distribuție Durată Trade-uri (Win vs Loss)')
             st.plotly_chart(fig_dur, use_container_width=True, key=f"dur_hist_{title_prefix}")
 
     st.markdown("---")
@@ -1383,17 +1191,13 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
         df_sig = df_sig[df_sig['Signal'].astype(str).str.strip() != '']
         if not df_sig.empty:
             signal_stats = df_sig.groupby('Signal').agg(
-                Profit=('Net P&L USD', 'sum'),
-                W=('Result', lambda x: (x == 'Win').sum()),
-                L=('Result', lambda x: (x == 'Loss').sum()),
-                Total=('Result', 'count'),
-                WR=('Result', lambda x: (x == 'Win').sum() / len(x) * 100),
+                Profit=('Net P&L USD', 'sum'), W=('Result', lambda x: (x == 'Win').sum()), L=('Result', lambda x: (x == 'Loss').sum()),
+                Total=('Result', 'count'), WR=('Result', lambda x: (x == 'Win').sum() / len(x) * 100),
                 Avg_Win=('Net P&L USD', lambda x: x[x > 0].mean() if (x > 0).any() else 0),
                 Avg_Loss=('Net P&L USD', lambda x: abs(x[x < 0].mean()) if (x < 0).any() else 0),
             ).reset_index()
             signal_stats['RR'] = signal_stats.apply(
-                lambda r: r['Avg_Win'] / r['Avg_Loss'] if r['Avg_Loss'] > 0 else r['Avg_Win'], axis=1
-            )
+                lambda r: r['Avg_Win'] / r['Avg_Loss'] if r['Avg_Loss'] > 0 else r['Avg_Win'], axis=1)
             fig_sig = px.bar(signal_stats, x='Signal', y='Profit',
                 text=signal_stats.apply(lambda r: f"${r['Profit']:,.0f}<br>{r['WR']:.0f}% ({int(r['W'])}W/{int(r['L'])}L)", axis=1),
                 template='plotly_dark', color='Profit', color_continuous_scale='RdYlGn')
@@ -1410,8 +1214,7 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
 
     st.markdown("---")
     st.subheader("📈 Equity Curve Strategie (Global)")
-    df_sorted = df.sort_values('Entry Time')
-    df_sorted = df_sorted.copy()
+    df_sorted = df.sort_values('Entry Time').copy()
     df_sorted['Cumulative'] = df_sorted['Net P&L USD'].cumsum()
     st.plotly_chart(px.line(df_sorted, x='Entry Time', y='Cumulative', template="plotly_dark", color_discrete_sequence=['#00cf8d']), use_container_width=True, key=f"equity_{title_prefix}")
 
@@ -1422,7 +1225,9 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
         st.dataframe(df[existing_cols].sort_values('Entry Time', ascending=False), use_container_width=True)
 
 
-# 4. LOGICĂ DATE + FILTRE
+# ============================================================
+# 4. LOGICĂ DATE + FILTRE + UI PRINCIPAL
+# ============================================================
 col_left, col_mid, col_right = st.columns([2, 1, 2])
 with col_mid:
     st.image("logo-lvlup.png", use_container_width=True)
@@ -1480,11 +1285,9 @@ if uploaded_file:
         if 'Signal' not in df_combined.columns:
             df_combined['Signal'] = 'N/A'
 
-        # Calculăm sesiunea după ora de intrare (Sesiunea 1 = înainte de 15:30, Sesiunea 2 = după)
         cutoff = datetime.strptime("15:30", "%H:%M").time()
         df_combined['Session'] = df_combined['Entry Time'].apply(
-            lambda x: "Sesiunea 1" if x.time() < cutoff else "Sesiunea 2"
-        )
+            lambda x: "Sesiunea 1" if x.time() < cutoff else "Sesiunea 2")
 
         st.markdown("### 🔍 Filtrare Date")
         c1, c2, c3, c4, c5 = st.columns(5)
@@ -1523,7 +1326,6 @@ if uploaded_file:
             csv_data = df_final[existing_cols].sort_values('Entry Time', ascending=False).to_csv(index=False)
             st.download_button(label="⬇️ Export CSV", data=csv_data, file_name="trades_filtrate.csv", mime="text/csv")
 
-        # ── TAB-URI ──
         tab_global, tab_s1, tab_s2, tab_risk, tab_mc, tab_adv = st.tabs([
             "🌍 Global", "🌅 Sesiunea 1", "🌆 Sesiunea 2",
             "💰 Risk Management", "🎲 Monte Carlo", "🔬 Analize Avansate"
@@ -1541,19 +1343,45 @@ if uploaded_file:
         with tab_adv:
             render_advanced_analysis(df_final)
 
-        # --- BUTON DESCARCARE PDF ---
+        # ── EXPORT PDF COMPLET ──
         st.markdown("---")
-        st.markdown("<h3 style='text-align: center;'>📄 Exportă Raportul</h3>", unsafe_allow_html=True)
-        pdf_data = generate_pdf_report(df_final)
-        col_btn1, col_btn2, col_btn3 = st.columns([2, 1, 2])
+        st.markdown("<h3 style='text-align: center;'>📄 Exportă Raportul Complet</h3>", unsafe_allow_html=True)
+        st.markdown(
+            "<p style='text-align:center; color:#8b949e;'>"
+            "PDF complet cu statistici, grafice, Risk Management și tabelele detaliate."
+            "</p>",
+            unsafe_allow_html=True
+        )
+
+        col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 2])
         with col_btn2:
-            st.download_button(
-                label="📥 Descarcă Raport PDF",
-                data=pdf_data,
-                file_name="Raport_TradingView_Minute.pdf",
-                mime="application/pdf",
-                use_container_width=True
+            if st.button("🔄 Generează PDF Complet", use_container_width=True, type="primary"):
+                with st.spinner("Se generează PDF-ul complet cu toate graficele... (~10-20 secunde)"):
+                    pdf_data_full = generate_full_pdf_report(df_final)
+                st.download_button(
+                    label="📥 Descarcă Raport PDF Complet",
+                    data=pdf_data_full,
+                    file_name="Raport_Trading_Complet.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+        with col_btn3:
+            st.markdown(
+                """
+                <div style='padding-top: 4px;'>
+                    <button onclick='window.print()'
+                        style='width:100%; background:#161b22; color:#e6edf3;
+                               border:1px solid #30363d; border-radius:8px;
+                               padding:10px 0; font-size:14px; cursor:pointer;
+                               margin-top: 0px;'>
+                        🖨️ Print / Save as PDF din Browser
+                    </button>
+                </div>
+                """,
+                unsafe_allow_html=True
             )
 
     except Exception as e:
         st.error(f"Eroare la citirea sau procesarea datelor: {e}")
+        import traceback
+        st.code(traceback.format_exc())
