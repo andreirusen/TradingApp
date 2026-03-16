@@ -1232,7 +1232,7 @@ col_left, col_mid, col_right = st.columns([2, 1, 2])
 with col_mid:
     #st.image("logo-lvlup.png", use_container_width=True)
 
-    st.markdown("<h2 style='text-align: center;'>TradingView Strategy</h2>", unsafe_allow_html=True)
+    #st.markdown("<h2 style='text-align: center;'>TradingView Strategy</h2>", unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("Încarcă fișierul .XLSX", type=["xlsx"])
 
