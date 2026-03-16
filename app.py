@@ -1230,6 +1230,8 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
 # ============================================================
 col_left, col_mid, col_right = st.columns([2, 1, 2])
 with col_mid:
+    #st.image("logo-lvlup.png", use_container_width=True)
+
     st.markdown("<h2 style='text-align: center;'>TradingView Payout & Strategy</h2>", unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("Încarcă fișierul .XLSX", type=["xlsx"])
