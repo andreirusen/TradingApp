@@ -1240,6 +1240,28 @@ with col_mid:
 
 import json
 import requests as _requests
+from datetime import date as _date
+
+# ── FUNCȚIE PRELUARE CURS BNR PENTRU O DATĂ SPECIFICĂ ──
+def fetch_bnr_rates(target_date: _date) -> dict:
+    """
+    Preia cursul BNR pentru o dată specifică via API public cursbnr.servicii-informatice.ro
+    Returnează dict cu EUR, USD în RON sau None la eroare.
+    """
+    date_str = target_date.strftime("%Y-%m-%d")
+    url = f"https://cursbnr.servicii-informatice.ro/api_public.php?data={date_str}&valute=EUR,USD"
+    try:
+        resp = _requests.get(url, timeout=10)
+        data = resp.json()
+        rates = data.get("rates", {})
+        eur = float(rates.get("EUR", {}).get("valoare", 0))
+        usd = float(rates.get("USD", {}).get("valoare", 0))
+        actual_date = data.get("data", date_str)
+        if eur > 0 and usd > 0:
+            return {"eur": eur, "usd": usd, "data": actual_date, "ok": True}
+    except Exception:
+        pass
+    return {"eur": None, "usd": None, "data": date_str, "ok": False}
 
 def fetch_anaf_tax_info():
     """Fetch latest ANAF tax info via Claude API for up-to-date rates."""
@@ -1337,30 +1359,121 @@ def calculate_taxes_ro(venit_net_ron: float, tax_info: dict) -> dict:
 
 # ── INIȚIALIZARE STATE ──
 if "payouts_data" not in st.session_state:
-    st.session_state.payouts_data = {}          # {an: [{"data": str, "suma_usd": float}, ...]}
+    st.session_state.payouts_data = {}
 if "conturi_data" not in st.session_state:
-    st.session_state.conturi_data = {}          # {an: [{"data": str, "cost_usd": float, "firma": str}, ...]}
-if "eur_ron" not in st.session_state:
-    st.session_state.eur_ron = 4.97
-if "usd_ron" not in st.session_state:
-    st.session_state.usd_ron = 4.60
+    st.session_state.conturi_data = {}
 if "tax_info" not in st.session_state:
     st.session_state.tax_info = None
+if "bnr_rates_cache" not in st.session_state:
+    st.session_state.bnr_rates_cache = {}   # {date_str: {eur, usd, data, ok}}
+if "bnr_selected_date" not in st.session_state:
+    st.session_state.bnr_selected_date = datetime.now().date()
 
 st.markdown("---")
 st.markdown("<h2 style='text-align:center;'>💼 Tracker Financiar & Calculator Taxe ANAF</h2>", unsafe_allow_html=True)
 
-# ── CURS VALUTAR ──
-with st.expander("⚙️ Setări Curs Valutar", expanded=False):
-    cc1, cc2 = st.columns(2)
-    with cc1:
-        st.session_state.usd_ron = st.number_input("Curs USD → RON:", min_value=1.0, max_value=20.0,
-                                                    value=st.session_state.usd_ron, step=0.01, format="%.4f")
-    with cc2:
-        st.session_state.eur_ron = st.number_input("Curs EUR → RON:", min_value=1.0, max_value=20.0,
-                                                    value=st.session_state.eur_ron, step=0.01, format="%.4f")
+# ── CURS VALUTAR BNR ──
+with st.expander("💱 Curs Valutar BNR — Selectează Data", expanded=True):
+    bnr_c1, bnr_c2, bnr_c3 = st.columns([2, 1, 1])
+    with bnr_c1:
+        st.markdown("**Alege data pentru cursul BNR:**")
+        bnr_date_mode = st.radio(
+            "Mod selectare:",
+            ["📅 Astăzi", "📆 Dată specifică (ex: 31.12.2025)", "✏️ Manual"],
+            horizontal=True,
+            label_visibility="collapsed"
+        )
 
-usd_ron = st.session_state.usd_ron
+    if bnr_date_mode == "📅 Astăzi":
+        bnr_date = datetime.now().date()
+        st.session_state.bnr_selected_date = bnr_date
+    elif bnr_date_mode == "📆 Dată specifică (ex: 31.12.2025)":
+        bnr_date = st.date_input(
+            "Selectează data:",
+            value=st.session_state.bnr_selected_date,
+            min_value=_date(2005, 1, 1),
+            max_value=datetime.now().date(),
+            format="DD.MM.YYYY",
+            key="bnr_date_picker"
+        )
+        st.session_state.bnr_selected_date = bnr_date
+    else:
+        bnr_date = None  # manual — se setează mai jos
+
+    # Buton fetch
+    bnr_fetch_col1, bnr_fetch_col2 = st.columns([1, 3])
+    with bnr_fetch_col1:
+        fetch_bnr_btn = st.button("🔄 Preia curs BNR", use_container_width=True, type="primary",
+                                   disabled=(bnr_date_mode == "✏️ Manual"))
+
+    bnr_date_key = str(bnr_date) if bnr_date else None
+
+    # Auto-fetch la prima accesare sau la apăsarea butonului
+    if bnr_date_mode != "✏️ Manual":
+        if fetch_bnr_btn or (bnr_date_key and bnr_date_key not in st.session_state.bnr_rates_cache):
+            with st.spinner(f"Se preia cursul BNR pentru {bnr_date.strftime('%d.%m.%Y')}..."):
+                result = fetch_bnr_rates(bnr_date)
+                st.session_state.bnr_rates_cache[bnr_date_key] = result
+
+    # Afișare rezultat / input manual
+    if bnr_date_mode == "✏️ Manual":
+        man_c1, man_c2 = st.columns(2)
+        with man_c1:
+            usd_ron_manual = st.number_input("Curs USD → RON (manual):", min_value=1.0, max_value=20.0,
+                                              value=4.60, step=0.0001, format="%.4f", key="usd_ron_manual")
+        with man_c2:
+            eur_ron_manual = st.number_input("Curs EUR → RON (manual):", min_value=1.0, max_value=20.0,
+                                              value=4.97, step=0.0001, format="%.4f", key="eur_ron_manual")
+        usd_ron = usd_ron_manual
+        eur_ron = eur_ron_manual
+        bnr_status_msg = "⚙️ Curs introdus manual"
+        bnr_ok = True
+    elif bnr_date_key and bnr_date_key in st.session_state.bnr_rates_cache:
+        cached = st.session_state.bnr_rates_cache[bnr_date_key]
+        if cached["ok"]:
+            usd_ron = cached["usd"]
+            eur_ron = cached["eur"]
+            actual_d = cached["data"]
+            bnr_status_msg = f"✅ Curs BNR pentru **{actual_d}** preluat de pe cursbnr.ro"
+            bnr_ok = True
+        else:
+            usd_ron = 4.60
+            eur_ron = 4.97
+            bnr_status_msg = f"⚠️ Nu s-a putut prelua cursul pentru {bnr_date_key} (zi nebancară sau eroare). Se folosesc valori implicite."
+            bnr_ok = False
+    else:
+        usd_ron = 4.60
+        eur_ron = 4.97
+        bnr_status_msg = "⏳ Apasă 'Preia curs BNR' pentru a încărca cursul oficial."
+        bnr_ok = False
+
+    # Afișare carduri curs
+    rate_c1, rate_c2, rate_c3 = st.columns(3)
+    rate_color = "#00cf8d" if bnr_ok else "#ffa500"
+    with rate_c1:
+        st.markdown(f"""
+            <div style="background:#161b22; border:1px solid #30363d; border-left:4px solid {rate_color};
+                        border-radius:8px; padding:12px; text-align:center;">
+                <div style="font-size:12px; color:#8b949e; text-transform:uppercase;">USD → RON</div>
+                <div style="font-size:22px; font-weight:bold; color:{rate_color};">{usd_ron:.4f}</div>
+            </div>""", unsafe_allow_html=True)
+    with rate_c2:
+        st.markdown(f"""
+            <div style="background:#161b22; border:1px solid #30363d; border-left:4px solid {rate_color};
+                        border-radius:8px; padding:12px; text-align:center;">
+                <div style="font-size:12px; color:#8b949e; text-transform:uppercase;">EUR → RON</div>
+                <div style="font-size:22px; font-weight:bold; color:{rate_color};">{eur_ron:.4f}</div>
+            </div>""", unsafe_allow_html=True)
+    with rate_c3:
+        st.markdown(f"""
+            <div style="background:#161b22; border:1px solid #30363d; border-left:4px solid {rate_color};
+                        border-radius:8px; padding:12px; text-align:center;">
+                <div style="font-size:12px; color:#8b949e; text-transform:uppercase;">Sursă</div>
+                <div style="font-size:13px; color:{rate_color}; margin-top:4px;">BNR / cursbnr.ro</div>
+            </div>""", unsafe_allow_html=True)
+
+    st.markdown(f"<small style='color:#8b949e;'>{bnr_status_msg}</small>", unsafe_allow_html=True)
+    st.markdown("<small style='color:#555;'>ℹ️ BNR publică cursul în ziua precedentă pentru ziua următoare. Zilele de weekend/sărbătoare folosesc cursul zilei bancare anterioare. Pentru declarația 212 (an fiscal 2025) folosește data de 31.12.2025.</small>", unsafe_allow_html=True)
 
 # ── SELECTARE AN ──
 current_year = datetime.now().year
