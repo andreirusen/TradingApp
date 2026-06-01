@@ -1748,12 +1748,34 @@ uploaded_file = st.file_uploader("Încarcă fișierul .XLSX", type=["xlsx"])
 
 if uploaded_file:
     try:
-        df_raw = pd.read_excel(uploaded_file, sheet_name='List of trades', engine='openpyxl')
-        df_entries = df_raw[df_raw['Type'].str.contains('Entry', na=False)].copy()
-        df_exits = df_raw[df_raw['Type'].str.contains('Exit', na=False)].copy()
+        # ── DETECTARE AUTOMATĂ FORMAT FIȘIER ──
+        _xl = pd.ExcelFile(uploaded_file, engine='openpyxl')
+        _sheets = _xl.sheet_names
+
+        # Detectăm foaia corectă
+        _sheet_candidates = ['List of trades', 'Trades', 'trades', 'list of trades']
+        _sheet_name = next((s for s in _sheet_candidates if s in _sheets), None)
+        if _sheet_name is None:
+            st.error(f"Nu am găsit o foaie de trades în fișier. Foi disponibile: {_sheets}")
+            st.stop()
+
+        df_raw = pd.read_excel(uploaded_file, sheet_name=_sheet_name, engine='openpyxl')
+
+        # Detectăm coloana de Trade ID
+        _trade_id_col = next((c for c in df_raw.columns if c in ['Trade #', 'Trade number', 'trade_id', 'ID']), None)
+        if _trade_id_col is None:
+            st.error(f"Nu am găsit coloana de Trade ID. Coloane disponibile: {df_raw.columns.tolist()}")
+            st.stop()
+
+        # Redenumim Trade ID → 'Trade #' pentru compatibilitate cu restul codului
+        if _trade_id_col != 'Trade #':
+            df_raw = df_raw.rename(columns={_trade_id_col: 'Trade #'})
+
+        df_entries = df_raw[df_raw['Type'].str.contains('Entry', case=False, na=False)].copy()
+        df_exits  = df_raw[df_raw['Type'].str.contains('Exit',  case=False, na=False)].copy()
 
         df_entries['Entry Time'] = pd.to_datetime(df_entries['Date and time'])
-        df_exits['Exit Time'] = pd.to_datetime(df_exits['Date and time'])
+        df_exits['Exit Time']    = pd.to_datetime(df_exits['Date and time'])
 
         df_combined = pd.merge(df_exits, df_entries[['Trade #', 'Entry Time', 'Type']], on='Trade #', how='left')
         df_combined = df_combined.drop_duplicates(subset='Trade #', keep='first')
@@ -1768,18 +1790,14 @@ if uploaded_file:
         type_col = 'Type_y' if 'Type_y' in df_combined.columns else 'Type'
         df_combined['Direction'] = df_combined[type_col].apply(get_direction)
 
-        if 'Net P&L USD' in df_combined.columns:
-            pnl_col = 'Net P&L USD'
-        elif 'Profit/Loss USD' in df_combined.columns:
-            pnl_col = 'Profit/Loss USD'
-        elif 'Profit/Loss' in df_combined.columns:
-            pnl_col = 'Profit/Loss'
-        else:
-            pnl_col = None
+        # Detectăm coloana P&L — suportăm toate variantele cunoscute
+        _pnl_candidates = ['Net P&L USD', 'Net PnL USD', 'Profit/Loss USD', 'Profit/Loss',
+                           'Net P&L', 'Net PnL', 'PnL USD', 'PnL']
+        pnl_col = next((c for c in _pnl_candidates if c in df_combined.columns), None)
+        if pnl_col is None:
             df_combined['Net P&L USD'] = 0
             st.warning("Atenție: Nu am găsit nicio coloană de Profit/Loss!")
-
-        if pnl_col:
+        else:
             df_combined['Net P&L USD'] = pd.to_numeric(df_combined[pnl_col], errors='coerce').fillna(0)
 
         df_combined['Result'] = df_combined['Net P&L USD'].apply(lambda x: 'Win' if x > 0 else 'Loss')
