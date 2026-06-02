@@ -1748,17 +1748,11 @@ st.markdown("---")
 st.markdown("<h2 style='text-align:center;'>⚖️ Schiță Hedge — Funded vs Challenge</h2>", unsafe_allow_html=True)
 st.markdown("<p style='text-align:center; color:#8b949e; margin-bottom:20px;'>Analizează dacă merită schema PH2 + Funded înainte să cumperi conturile</p>", unsafe_allow_html=True)
 
-# ── INPUT CONTURI: titlurile pe același rând ──
+# ── INPUT CONTURI ──
 hi1, hi2 = st.columns(2)
+
 with hi1:
-    st.markdown("<h4 style='color:#00cf8d; margin-bottom:12px;'>✅ Contul Funded</h4>", unsafe_allow_html=True)
-with hi2:
-    cont_tip = st.selectbox("Tip cont #2:", ["Phase 1 (PH1)", "Phase 2 (PH2)", "Funded"], key="cont_tip")
-
-tip_color = "#ffa500" if "PH1" in cont_tip else ("#4a9eff" if "PH2" in cont_tip else "#cf4aff")
-
-hi1b, hi2b = st.columns(2)
-with hi1b:
+    st.markdown("<h4 style='color:#00cf8d; margin-bottom:8px;'>✅ Contul Funded</h4>", unsafe_allow_html=True)
     f_size = st.number_input("Mărime cont Funded ($):", min_value=1000, value=25000, step=1000, key="f_size")
     f_cost = st.number_input("Cost achiziție Funded ($):", min_value=0, value=250, step=10, key="f_cost")
     f_profit_pct = st.number_input(
@@ -1766,8 +1760,11 @@ with hi1b:
         help="Ce % din profit îl primești tu (ex: 80%)"
     )
 
-with hi2b:
-    st.markdown(f"<h4 style='color:{tip_color}; margin-bottom:12px;'>🎯 Contul {cont_tip}</h4>", unsafe_allow_html=True)
+with hi2:
+    cont_tip = st.selectbox("Tip cont #2:", ["Phase 1 (PH1)", "Phase 2 (PH2)", "Funded"], key="cont_tip")
+    tip_color = "#ffa500" if "PH1" in cont_tip else ("#4a9eff" if "PH2" in cont_tip else "#cf4aff")
+
+    st.markdown(f"<h4 style='color:{tip_color}; margin-bottom:8px;'>🎯 Contul {cont_tip}</h4>", unsafe_allow_html=True)
     c_size = st.number_input(f"Mărime cont {cont_tip} ($):", min_value=1000, value=50000, step=1000, key="c_size")
     c_cost = st.number_input(f"Cost achiziție {cont_tip} ($):", min_value=0, value=300, step=10, key="c_cost")
     if "Funded" in cont_tip:
@@ -1775,20 +1772,27 @@ with hi2b:
             "Profit split cont #2 (%):", min_value=50, max_value=100, value=80, step=5, key="c_split"
         )
     else:
-        c_profit_pct = 80
+        c_profit_pct = 80  # challenge — nu contează split-ul până nu devine funded
 
 total_cost = f_cost + c_cost
 
-# ── LIMITE ──
+# ── LIMITE CONTURI ──
 st.markdown("")
 lim1, lim2 = st.columns(2)
+
 with lim1:
-    st.markdown("<p style='color:#8b949e; font-size:13px; margin-bottom:4px;'>Limite Cont Funded</p>", unsafe_allow_html=True)
-    f_max_loss_pct = st.number_input("Pierdere maximă Funded (%):", min_value=1.0, max_value=20.0, value=10.0, step=0.5, key="f_maxloss")
-    f_profit_target_pct = st.number_input("Target profit Funded (%):", min_value=1.0, max_value=30.0, value=10.0, step=0.5, key="f_target")
+    st.markdown("<h5 style='color:#8b949e; margin-bottom:6px;'>Limite Cont Funded</h5>", unsafe_allow_html=True)
+    f_max_loss_pct = st.number_input(
+        "Pierdere maximă Funded (%):", min_value=1.0, max_value=20.0, value=10.0, step=0.5, key="f_maxloss",
+        help="Breach dacă pierzi acest % din cont"
+    )
+    f_profit_target_pct = st.number_input(
+        "Target profit Funded (%):", min_value=1.0, max_value=30.0, value=10.0, step=0.5, key="f_target",
+        help="% profit pentru payout"
+    )
 
 with lim2:
-    st.markdown(f"<p style='color:#8b949e; font-size:13px; margin-bottom:4px;'>Limite {cont_tip}</p>", unsafe_allow_html=True)
+    st.markdown(f"<h5 style='color:#8b949e; margin-bottom:6px;'>Limite {cont_tip}</h5>", unsafe_allow_html=True)
     if "PH1" in cont_tip:
         c_max_loss_pct = st.number_input("Pierdere maximă PH1 (%):", min_value=1.0, max_value=20.0, value=10.0, step=0.5, key="c_maxloss")
         c_profit_target_pct = st.number_input("Target profit PH1 (%):", min_value=1.0, max_value=30.0, value=8.0, step=0.5, key="c_target")
@@ -1808,237 +1812,240 @@ st.markdown("---")
 # CALCULE PRINCIPALE
 # ══════════════════════════════════════════════════════════════
 
-f_max_loss_usd = f_size * f_max_loss_pct / 100
-c_max_loss_usd = c_size * c_max_loss_pct / 100
-c_target_usd   = c_size * c_profit_target_pct / 100
+# Sume în $
+f_max_loss_usd  = f_size  * f_max_loss_pct  / 100
+f_target_usd    = f_size  * f_profit_target_pct / 100
+c_max_loss_usd  = c_size  * c_max_loss_pct  / 100
+c_target_usd    = c_size  * c_profit_target_pct / 100
+
+# Profitul pe funded dacă challenge-ul pierde 10% (hedge complet)
+# = challenge pierde max → funded câștigă echivalentul
+hedge_profit_funded_usd = c_max_loss_usd * (f_profit_pct / 100)
+hedge_profit_funded_pct = hedge_profit_funded_usd / f_size * 100
+
+# Ce se întâmplă dacă funded pierde max (breach)
+funded_breach_total_loss = f_max_loss_usd + total_cost  # pierdere totala
+
+# Scenariul fericit: challenge trece → cont nou funded
+challenge_trece_profit_usd = c_target_usd * (c_profit_pct / 100) if "Funded" in cont_tip else 0
 
 # ── DISPLAY: STATUS BARĂ PROGRES ──
-def progress_bar(label, current_pct, max_pct, target_pct, accent_color, size_usd):
-    consumed      = min(abs(min(current_pct, 0.0)), max_pct)   # doar pierderea contează
-    ramas_breach  = max_pct - consumed
-    # target rămas: dacă ești pe minus, trebuie să recuperezi + să faci target
-    ramas_target  = target_pct + abs(min(current_pct, 0.0)) if current_pct < 0 else max(0.0, target_pct - current_pct)
+def progress_bar(label, current_pct, max_pct, target_pct, color_bar, color_warn, size_usd, key):
+    """Bara de progres cu limite vizuale."""
+    # cât % din limita maximă am consumat
+    consumed = min(abs(current_pct), max_pct)
+    ramas_pana_breach = max_pct - consumed
+    ramas_pana_target = max(0, target_pct - current_pct) if current_pct >= 0 else target_pct + abs(current_pct)
 
-    consumed_usd      = size_usd * consumed / 100
-    breach_ramas_usd  = size_usd * ramas_breach / 100
-    target_ramas_usd  = size_usd * ramas_target / 100
+    consumed_usd = size_usd * consumed / 100
+    breach_ramas_usd = size_usd * ramas_pana_breach / 100
+    target_ramas_usd = size_usd * ramas_pana_target / 100
 
-    bar_fill  = int((consumed / max_pct) * 100)
-    bar_color = accent_color if bar_fill < 70 else ("#ffa500" if bar_fill < 90 else "#ff4444")
+    bar_fill = int((consumed / max_pct) * 100)
+
+    bar_color = color_bar if bar_fill < 70 else ("#ffa500" if bar_fill < 90 else color_warn)
 
     st.markdown(f"""
-    <div style="background:#161b22; border:1px solid #30363d; border-radius:10px; padding:16px; margin-bottom:4px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+    <div style="background:#161b22; border:1px solid #30363d; border-radius:10px; padding:16px; margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
             <span style="font-weight:bold; color:white; font-size:15px;">{label}</span>
-            <span style="font-size:13px; color:#8b949e; font-weight:bold;">{current_pct:+.2f}%</span>
+            <span style="font-size:13px; color:#8b949e;">${size_usd:,.0f} cont</span>
         </div>
-        <div style="background:#0e1117; border-radius:6px; height:14px; position:relative; margin-bottom:12px; overflow:hidden;">
-            <div style="background:{bar_color}; width:{bar_fill}%; height:100%; border-radius:6px; opacity:0.9;"></div>
+        <!-- Bara progres -->
+        <div style="background:#0e1117; border-radius:6px; height:18px; position:relative; margin-bottom:10px; overflow:hidden;">
+            <div style="background:{bar_color}; width:{bar_fill}%; height:100%; border-radius:6px;
+                        transition:width 0.3s; opacity:0.85;"></div>
+            <div style="position:absolute; top:0; left:0; width:100%; height:100%; display:flex;
+                        align-items:center; justify-content:center; font-size:11px; font-weight:bold; color:white;">
+                {consumed:.2f}% / {max_pct:.1f}% limită
+            </div>
         </div>
-        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; font-size:13px; text-align:center;">
-            <div style="background:#0e1117; padding:8px; border-radius:6px;">
-                <div style="color:#8b949e; font-size:10px; text-transform:uppercase; margin-bottom:4px;">Pierdut</div>
-                <div style="color:#f0c040; font-weight:bold;">${consumed_usd:,.0f}</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; font-size:13px;">
+            <div style="background:#0e1117; padding:8px; border-radius:6px; text-align:center;">
+                <div style="color:#8b949e; font-size:11px; margin-bottom:3px;">PIERDUT</div>
+                <div style="color:{color_warn}; font-weight:bold;">${consumed_usd:,.2f}</div>
                 <div style="color:#555; font-size:11px;">{consumed:.2f}%</div>
             </div>
-            <div style="background:#0e1117; padding:8px; border-radius:6px;">
-                <div style="color:#8b949e; font-size:10px; text-transform:uppercase; margin-bottom:4px;">Până la Breach</div>
-                <div style="color:#ff5555; font-weight:bold;">${breach_ramas_usd:,.0f}</div>
-                <div style="color:#555; font-size:11px;">{ramas_breach:.2f}%</div>
+            <div style="background:#0e1117; padding:8px; border-radius:6px; text-align:center;">
+                <div style="color:#8b949e; font-size:11px; margin-bottom:3px;">PÂNĂ LA BREACH</div>
+                <div style="color:{bar_color}; font-weight:bold;">${breach_ramas_usd:,.2f}</div>
+                <div style="color:#555; font-size:11px;">{ramas_pana_breach:.2f}%</div>
             </div>
-            <div style="background:#0e1117; padding:8px; border-radius:6px;">
-                <div style="color:#8b949e; font-size:10px; text-transform:uppercase; margin-bottom:4px;">Până la Target</div>
-                <div style="color:#00cf8d; font-weight:bold;">${target_ramas_usd:,.0f}</div>
-                <div style="color:#555; font-size:11px;">{ramas_target:.2f}%</div>
+            <div style="background:#0e1117; padding:8px; border-radius:6px; text-align:center;">
+                <div style="color:#8b949e; font-size:11px; margin-bottom:3px;">PÂNĂ LA TARGET</div>
+                <div style="color:#00cf8d; font-weight:bold;">${target_ramas_usd:,.2f}</div>
+                <div style="color:#555; font-size:11px;">{ramas_pana_target:.2f}%</div>
             </div>
         </div>
     </div>""", unsafe_allow_html=True)
 
-st.markdown("### 📊 Status Curent")
+st.markdown("### 📊 Status Curent Conturi")
 bp1, bp2 = st.columns(2)
 with bp1:
-    f_cur = st.number_input(
-        "Procentaj curent Funded (+ profit / − pierdere):",
-        min_value=float(-f_max_loss_pct), max_value=float(f_profit_target_pct * 3),
+    f_current_pct_display = st.number_input(
+        "Procentaj curent Funded (+ profit / - pierdere):", 
+        min_value=-f_max_loss_pct, max_value=f_profit_target_pct * 3,
         value=0.0, step=0.1, format="%.2f", key="f_cur_pct"
     )
 with bp2:
-    c_cur = st.number_input(
-        f"Procentaj curent {cont_tip} (+ profit / − pierdere):",
-        min_value=float(-c_max_loss_pct), max_value=float(c_profit_target_pct * 3),
+    c_current_pct_display = st.number_input(
+        f"Procentaj curent {cont_tip} (+ profit / - pierdere):",
+        min_value=-c_max_loss_pct, max_value=c_profit_target_pct * 3,
         value=0.0, step=0.1, format="%.2f", key="c_cur_pct"
     )
 
 pb1, pb2 = st.columns(2)
 with pb1:
-    progress_bar(f"✅ Funded  •  ${f_size:,.0f}", f_cur, f_max_loss_pct, f_profit_target_pct, "#00cf8d", f_size)
+    progress_bar(
+        f"✅ Funded ${f_size:,.0f}",
+        f_current_pct_display,
+        f_max_loss_pct,
+        f_profit_target_pct,
+        "#00cf8d", "#ff4444",
+        f_size, "f_bar"
+    )
 with pb2:
-    progress_bar(f"🎯 {cont_tip}  •  ${c_size:,.0f}", c_cur, c_max_loss_pct, c_profit_target_pct, tip_color, c_size)
+    progress_bar(
+        f"🎯 {cont_tip} ${c_size:,.0f}",
+        c_current_pct_display,
+        c_max_loss_pct,
+        c_profit_target_pct,
+        tip_color, "#ff4444",
+        c_size, "c_bar"
+    )
 
 st.markdown("---")
 
-# ══════════════════════════════════════════════════════════════
-# SCENARII HEDGE — logică corelată
-# ══════════════════════════════════════════════════════════════
-st.markdown("### 🔀 Scenarii Hedge")
-
-# ── Logică procente corelate ──
-# Riscul rămas pe challenge (cât mai poate pierde fără breach), ținând cont de starea curentă
-c_risc_ramas_pct  = c_max_loss_pct - abs(min(c_cur, 0.0))   # ex: 10% - 2% pierdut = 8% risc rămas
-# Funded e curent la f_cur; dacă e negativ, asta "consumă" din profitul posibil
-# Profitul net realizabil pe Funded din hedge = risc rămas challenge − datoria curentă Funded
-profit_net_pct_funded = c_risc_ramas_pct - abs(min(f_cur, 0.0))  # ex: 8% - 2% = 6%
-profit_net_pct_funded = max(profit_net_pct_funded, 0.0)
-
-# Valoarea în $ a 1% din Funded (baza de calcul pentru hedge pe cont mai mic)
-one_pct_funded_usd = f_size / 100   # ex: 25k → $250 per 1%
-
-# Profit brut pe Funded din hedge (aplicat la dimensiunea contului funded)
-profit_brut_funded_usd = profit_net_pct_funded * one_pct_funded_usd  # 6% * $250 = $1,500
-profit_brut_dupa_split = profit_brut_funded_usd * (f_profit_pct / 100)
+# ── SCENARII HEDGE ──
+st.markdown("### 🔀 Scenarii Hedge Schematic")
 
 sc1, sc2 = st.columns(2)
 
 with sc1:
-    # SCENARIUL 1: Challenge pică (breach) → Funded câștigă din hedge
-    net1 = profit_brut_dupa_split - total_cost
-    net1_color = "#00cf8d" if net1 >= 0 else "#ff6b6b"
+    # SCENARIUL 1: Challenge pică → Funded câștigă
+    _profit_usd = c_max_loss_usd * (f_profit_pct / 100)
+    _net = _profit_usd - total_cost
+    _net_color = "#00cf8d" if _net >= 0 else "#ff6b6b"
 
     st.markdown(f"""
-    <div style="background:#0d1a10; border:1px solid #00cf8d; border-left:4px solid #00cf8d;
-                border-radius:10px; padding:20px;">
-        <div style="color:#00cf8d; font-weight:bold; font-size:15px; margin-bottom:4px;">
-            Scenariul 1 — {cont_tip} face Breach
-        </div>
-        <div style="color:#8b949e; font-size:12px; margin-bottom:16px;">
-            Challenge-ul pierde {c_max_loss_pct:.0f}% → Funded câștigă din hedge
-        </div>
-
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px;">
-            <div style="background:#0e1117; padding:10px; border-radius:8px; text-align:center;">
-                <div style="color:#8b949e; font-size:11px; margin-bottom:4px;">Risc rămas {cont_tip}</div>
-                <div style="color:white; font-size:18px; font-weight:bold;">{c_risc_ramas_pct:.2f}%</div>
-            </div>
-            <div style="background:#0e1117; padding:10px; border-radius:8px; text-align:center;">
-                <div style="color:#8b949e; font-size:11px; margin-bottom:4px;">Funded curent</div>
-                <div style="color:{'#ff6b6b' if f_cur < 0 else '#00cf8d'}; font-size:18px; font-weight:bold;">{f_cur:+.2f}%</div>
-            </div>
-        </div>
-
-        <div style="background:#0e1117; border-radius:8px; padding:12px; margin-bottom:14px;">
-            <div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:13px;">
-                <span style="color:#8b949e;">Profit net realizabil pe Funded</span>
-                <span style="color:white; font-weight:bold;">{profit_net_pct_funded:.2f}%
-                    <span style="color:#8b949e; font-size:11px;">({c_risc_ramas_pct:.1f}% − {abs(min(f_cur,0)):.1f}%)</span>
-                </span>
-            </div>
-            <div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:13px;">
-                <span style="color:#8b949e;">Valoare 1% din Funded</span>
-                <span style="color:white; font-weight:bold;">${one_pct_funded_usd:,.0f}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; font-size:13px;">
-                <span style="color:#8b949e;">Profit brut ({profit_net_pct_funded:.2f}% × ${one_pct_funded_usd:,.0f})</span>
-                <span style="color:#00cf8d; font-weight:bold;">+ ${profit_brut_funded_usd:,.2f}</span>
-            </div>
-        </div>
-
-        <div style="border-top:1px solid #1e2530; padding-top:12px;">
-            <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px;">
-                <span style="color:#8b949e;">Profit după split ({f_profit_pct}%)</span>
-                <span style="color:#00cf8d;">+ ${profit_brut_dupa_split:,.2f}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:10px;">
-                <span style="color:#8b949e;">Costuri achiziție conturi</span>
-                <span style="color:#ffa500;">− ${total_cost:,.2f}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span style="color:white; font-weight:bold; font-size:14px;">NET FINAL</span>
-                <span style="color:{net1_color}; font-size:22px; font-weight:bold;">{'+' if net1>=0 else ''}${net1:,.2f}</span>
-            </div>
+    <div style="background:#0d1a10; border:1px solid #00cf8d; border-left:5px solid #00cf8d;
+                border-radius:10px; padding:18px;">
+        <h4 style="color:#00cf8d; margin-top:0;">🔴 Scenariul 1 — {cont_tip} pierde {c_max_loss_pct:.0f}%</h4>
+        <p style="color:#8b949e; font-size:13px; margin-bottom:14px;">
+            Challenge-ul face breach → Funded câștigă echivalentul din hedge
+        </p>
+        <table style="width:100%; font-size:14px; border-collapse:collapse;">
+            <tr><td style="padding:6px; color:#8b949e;">Pierdere {cont_tip}:</td>
+                <td style="padding:6px; text-align:right; color:#ff6b6b; font-weight:bold;">- ${c_max_loss_usd:,.2f}</td></tr>
+            <tr><td style="padding:6px; color:#8b949e;">Profit Funded ({f_profit_pct}% split):</td>
+                <td style="padding:6px; text-align:right; color:#00cf8d; font-weight:bold;">+ ${_profit_usd:,.2f}</td></tr>
+            <tr><td style="padding:6px; color:#8b949e;">Profit Funded în %:</td>
+                <td style="padding:6px; text-align:right; color:#00cf8d; font-weight:bold;">+ {_profit_usd/f_size*100:.2f}%</td></tr>
+            <tr><td style="padding:6px; color:#8b949e;">Costuri totale conturi:</td>
+                <td style="padding:6px; text-align:right; color:#ffa500;">- ${total_cost:,.2f}</td></tr>
+            <tr style="border-top:1px solid #30363d;">
+                <td style="padding:8px; color:white; font-weight:bold;">NET FINAL:</td>
+                <td style="padding:8px; text-align:right; color:{_net_color}; font-weight:bold; font-size:18px;">{'+' if _net>=0 else ''} ${_net:,.2f}</td>
+            </tr>
+        </table>
+        <div style="margin-top:12px; padding:8px; background:#0e1117; border-radius:6px; font-size:12px; color:#8b949e;">
+            {'✅ Schema profitabilă — câștigul acoperă ambele conturi.' if _net >= 0 else f'⚠️ Schema negativă — trebuie profit ≥ ${total_cost:,.2f} din hedge.'}
         </div>
     </div>""", unsafe_allow_html=True)
 
 with sc2:
-    # SCENARIUL 2: Challenge trece PH2 → devii Funded pe cont mai mare
-    # Funded mic (25k) poate face breach în timp ce challenge-ul trece
-    # Profit pe noul funded (cont mare) = target % × split
-    new_funded_profit_usd = c_target_usd * (f_profit_pct / 100) if "PH" in cont_tip else 0
-    new_funded_cost = c_cost  # costul unui nou challenge dacă funded e pierdut
-    # Pierdere funded mic dacă face breach în timp ce PH2 trece
-    funded_breach_usd = f_max_loss_usd
-    net2 = new_funded_profit_usd - funded_breach_usd - total_cost
-    net2_color = "#00cf8d" if net2 >= 0 else "#ff6b6b"
-
-    sc2_title  = f"{cont_tip} Trece → Cont Funded ${c_size:,.0f}"
-    sc2_subtitle = f"PH2 atinge {c_profit_target_pct:.0f}% target → devii Funded pe ${c_size:,.0f}" if "PH" in cont_tip else "Ambele conturi Funded"
+    # SCENARIUL 2: Funded pierde (breach) → Challenge salvează
+    _loss_funded_usd = f_max_loss_usd
+    if "Funded" in cont_tip:
+        _gain_c_usd = f_max_loss_usd * (c_profit_pct / 100)
+        _gain_label = f"Profit cont #2 ({c_profit_pct}% split)"
+    else:
+        _gain_c_usd = 0
+        _gain_label = f"{cont_tip} nu generează profit direct"
+    _net2 = _gain_c_usd - _loss_funded_usd - total_cost
+    _net2_color = "#00cf8d" if _net2 >= 0 else "#ff6b6b"
 
     st.markdown(f"""
-    <div style="background:#0d1a2e; border:1px solid #4a9eff; border-left:4px solid #4a9eff;
-                border-radius:10px; padding:20px;">
-        <div style="color:#4a9eff; font-weight:bold; font-size:15px; margin-bottom:4px;">
-            Scenariul 2 — {sc2_title}
+    <div style="background:#1a0d0d; border:1px solid #ff4444; border-left:5px solid #ff4444;
+                border-radius:10px; padding:18px;">
+        <h4 style="color:#ff4444; margin-top:0;">⚠️ Scenariul 2 — Funded pierde {f_max_loss_pct:.0f}%</h4>
+        <p style="color:#8b949e; font-size:13px; margin-bottom:14px;">
+            Contul Funded face breach → ce se întâmplă cu banii tăi?
+        </p>
+        <table style="width:100%; font-size:14px; border-collapse:collapse;">
+            <tr><td style="padding:6px; color:#8b949e;">Pierdere Funded (breach):</td>
+                <td style="padding:6px; text-align:right; color:#ff6b6b; font-weight:bold;">- ${_loss_funded_usd:,.2f}</td></tr>
+            <tr><td style="padding:6px; color:#8b949e;">{_gain_label}:</td>
+                <td style="padding:6px; text-align:right; color:#00cf8d; font-weight:bold;">{'+' if _gain_c_usd > 0 else ''} ${_gain_c_usd:,.2f}</td></tr>
+            <tr><td style="padding:6px; color:#8b949e;">Costuri totale conturi:</td>
+                <td style="padding:6px; text-align:right; color:#ffa500;">- ${total_cost:,.2f}</td></tr>
+            <tr style="border-top:1px solid #30363d;">
+                <td style="padding:8px; color:white; font-weight:bold;">NET FINAL:</td>
+                <td style="padding:8px; text-align:right; color:{_net2_color}; font-weight:bold; font-size:18px;">{'+' if _net2>=0 else ''} ${_net2:,.2f}</td>
+            </tr>
+        </table>
+        <div style="margin-top:12px; padding:8px; background:#0e1117; border-radius:6px; font-size:12px; color:#8b949e;">
+            {'✅ Contul #2 compensează pierderea.' if _net2 >= 0 else '❌ Pierdere netă — dacă Funded face breach, ești pe minus.'}
         </div>
-        <div style="color:#8b949e; font-size:12px; margin-bottom:16px;">{sc2_subtitle}</div>
+    </div>""", unsafe_allow_html=True)
 
-        <div style="background:#0e1117; border-radius:8px; padding:12px; margin-bottom:14px;">
-            <div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:13px;">
-                <span style="color:#8b949e;">Target {cont_tip} ({c_profit_target_pct:.0f}% din ${c_size:,.0f})</span>
-                <span style="color:#4a9eff; font-weight:bold;">→ Funded ${c_size:,.0f}</span>
+# ── SCENARIUL 3: Ambele merg bine ──
+st.markdown("")
+if "PH" in cont_tip:
+    _sc3_profit_funded = f_size * f_profit_target_pct / 100 * (f_profit_pct / 100)
+    _sc3_c_trece = f"✅ {cont_tip} trece → devii Funded pe ${c_size:,.0f}"
+    _net3 = _sc3_profit_funded - total_cost
+    _net3_color = "#00cf8d" if _net3 >= 0 else "#ff6b6b"
+
+    st.markdown(f"""
+    <div style="background:#0d1a2e; border:1px solid #4a9eff; border-left:5px solid #4a9eff;
+                border-radius:10px; padding:18px;">
+        <h4 style="color:#4a9eff; margin-top:0;">🏆 Scenariul 3 — Ambele merg bine (Best Case)</h4>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px;">
+            <div>
+                <p style="color:#8b949e; font-size:13px;">Funded face target ({f_profit_target_pct:.0f}%):</p>
+                <div style="font-size:20px; font-weight:bold; color:#00cf8d;">+ ${_sc3_profit_funded:,.2f}</div>
+                <div style="font-size:12px; color:#8b949e;">după {f_profit_pct}% split</div>
             </div>
-            <div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:13px;">
-                <span style="color:#8b949e;">Profit primul payout nou funded ({f_profit_pct}% split)</span>
-                <span style="color:#00cf8d; font-weight:bold;">+ ${new_funded_profit_usd:,.2f}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; font-size:13px;">
-                <span style="color:#8b949e;">Pierdere Funded mic (breach în hedge)</span>
-                <span style="color:#ff6b6b; font-weight:bold;">− ${funded_breach_usd:,.2f}</span>
+            <div>
+                <p style="color:#8b949e; font-size:13px;">{_sc3_c_trece}:</p>
+                <div style="font-size:20px; font-weight:bold; color:#4a9eff;">Capital ${c_size:,.0f}</div>
+                <div style="font-size:12px; color:#8b949e;">cont nou finanțat</div>
             </div>
         </div>
-
-        <div style="border-top:1px solid #1e2530; padding-top:12px;">
-            <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px;">
-                <span style="color:#8b949e;">Costuri totale achiziție</span>
-                <span style="color:#ffa500;">− ${total_cost:,.2f}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <span style="color:white; font-weight:bold; font-size:14px;">NET FINAL</span>
-                <span style="color:{net2_color}; font-size:22px; font-weight:bold;">{'+' if net2>=0 else ''}${net2:,.2f}</span>
-            </div>
-            <div style="background:#0e1117; border-radius:6px; padding:8px; text-align:center; font-size:12px; color:#8b949e;">
-                + acces la capital finanțat de <span style="color:#4a9eff; font-weight:bold;">${c_size:,.0f}</span>
-            </div>
+        <div style="margin-top:12px; border-top:1px solid #30363d; padding-top:10px; display:flex; justify-content:space-between; align-items:center;">
+            <span style="color:#8b949e;">Net după costuri (${total_cost:,.0f}):</span>
+            <span style="color:{_net3_color}; font-size:20px; font-weight:bold;">{'+' if _net3>=0 else ''} ${_net3:,.2f} + acces ${c_size:,.0f} funded</span>
         </div>
     </div>""", unsafe_allow_html=True)
 
 # ── SUMAR COSTURI ──
 st.markdown("")
 st.markdown(f"""
-<div style="background:#161b22; border:1px solid #30363d; border-radius:10px; padding:16px 20px;
-            display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-    <div style="text-align:center;">
-        <div style="color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Funded ${f_size:,.0f}</div>
-        <div style="color:white; font-size:18px; font-weight:bold;">${f_cost:,.0f}</div>
+<div style="background:#161b22; border:1px solid #30363d; border-radius:10px; padding:16px; display:flex;
+            justify-content:space-between; align-items:center; flex-wrap:wrap; gap:15px;">
+    <div style="text-align:center; min-width:120px;">
+        <div style="color:#8b949e; font-size:12px; text-transform:uppercase; margin-bottom:4px;">Cost Funded</div>
+        <div style="color:white; font-size:20px; font-weight:bold;">${f_cost:,.0f}</div>
+        <div style="color:#8b949e; font-size:12px;">${f_size:,.0f} cont</div>
     </div>
-    <div style="color:#444; font-size:20px;">+</div>
-    <div style="text-align:center;">
-        <div style="color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">{cont_tip} ${c_size:,.0f}</div>
-        <div style="color:white; font-size:18px; font-weight:bold;">${c_cost:,.0f}</div>
+    <div style="color:#30363d; font-size:24px;">+</div>
+    <div style="text-align:center; min-width:120px;">
+        <div style="color:#8b949e; font-size:12px; text-transform:uppercase; margin-bottom:4px;">Cost {cont_tip}</div>
+        <div style="color:white; font-size:20px; font-weight:bold;">${c_cost:,.0f}</div>
+        <div style="color:#8b949e; font-size:12px;">${c_size:,.0f} cont</div>
     </div>
-    <div style="color:#444; font-size:20px;">=</div>
-    <div style="text-align:center;">
-        <div style="color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Total Investit</div>
-        <div style="color:#ffa500; font-size:24px; font-weight:bold;">${total_cost:,.0f}</div>
+    <div style="color:#30363d; font-size:24px;">=</div>
+    <div style="text-align:center; min-width:140px;">
+        <div style="color:#8b949e; font-size:12px; text-transform:uppercase; margin-bottom:4px;">TOTAL INVESTIT</div>
+        <div style="color:#ffa500; font-size:28px; font-weight:bold;">${total_cost:,.0f}</div>
+        <div style="color:#8b949e; font-size:12px;">pentru acces la ${f_size+c_size:,.0f} capital</div>
     </div>
-    <div style="color:#444; font-size:20px;">·</div>
-    <div style="text-align:center;">
-        <div style="color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Capital Accesat</div>
-        <div style="color:white; font-size:18px; font-weight:bold;">${f_size+c_size:,.0f}</div>
-    </div>
-    <div style="color:#444; font-size:20px;">·</div>
-    <div style="text-align:center;">
-        <div style="color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Break-even Hedge</div>
-        <div style="color:#00cf8d; font-size:18px; font-weight:bold;">{total_cost/c_size*100:.2f}%</div>
-        <div style="color:#555; font-size:11px;">din ${c_size:,.0f}</div>
+    <div style="color:#30363d; font-size:24px;">→</div>
+    <div style="text-align:center; min-width:140px;">
+        <div style="color:#8b949e; font-size:12px; text-transform:uppercase; margin-bottom:4px;">BREAK-EVEN HEDGE</div>
+        <div style="color:#00cf8d; font-size:20px; font-weight:bold;">{total_cost/c_size*100:.2f}%</div>
+        <div style="color:#8b949e; font-size:12px;">din ${c_size:,.0f} ca să ieși la 0</div>
     </div>
 </div>""", unsafe_allow_html=True)
 
