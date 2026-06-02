@@ -1899,130 +1899,122 @@ profit_brut_dupa_split = profit_brut_funded_usd * (f_profit_pct / 100)
 
 sc1, sc2 = st.columns(2)
 
-# ── Scenariul 1 — pre-calculăm tot ce intră în f-string ──
-net1             = profit_brut_dupa_split - total_cost
-net1_color       = "#00cf8d" if net1 >= 0 else "#ff6b6b"
-net1_sign        = "+" if net1 >= 0 else ""
-f_cur_color      = "#ff6b6b" if f_cur < 0 else "#00cf8d"
-f_cur_fmt        = f"{f_cur:+.2f}%"
-funded_deficit   = abs(min(f_cur, 0.0))
-formula_str      = f"{c_risc_ramas_pct:.1f}% \u2212 {funded_deficit:.1f}%"
-profit_brut_fmt  = f"${profit_brut_funded_usd:,.2f}"
-split_fmt        = f"${profit_brut_dupa_split:,.2f}"
-cost_fmt1        = f"${total_cost:,.2f}"
-net1_fmt         = f"{net1_sign}${net1:,.2f}"
-one_pct_fmt      = f"${one_pct_funded_usd:,.0f}"
-pnf_fmt          = f"{profit_net_pct_funded:.2f}%"
-c_risc_fmt       = f"{c_risc_ramas_pct:.2f}%"
+# ── Scenariul 1 — toate valorile pre-calculate ──
+net1            = profit_brut_dupa_split - total_cost
+net1_color      = "#00cf8d" if net1 >= 0 else "#ff6b6b"
+net1_sign       = "+" if net1 >= 0 else ""
+f_cur_color     = "#ff6b6b" if f_cur < 0 else "#00cf8d"
+funded_deficit  = abs(min(f_cur, 0.0))
+
+# Toate string-urile finale, fara diacritice problematice
+s1_title        = f"Scenariul 1 - {cont_tip} face Breach"
+s1_sub          = f"Challenge-ul pierde {c_max_loss_pct:.0f}% - Funded castiga din hedge"
+s1_risc_label   = f"Risc ramas {cont_tip}"
+s1_risc_val     = f"{c_risc_ramas_pct:.2f}%"
+s1_fcur_val     = f"{f_cur:+.2f}%"
+s1_pnf_val      = f"{profit_net_pct_funded:.2f}%"
+s1_formula      = f"({c_risc_ramas_pct:.1f}% - {funded_deficit:.1f}%)"
+s1_1pct_val     = f"${one_pct_funded_usd:,.0f}"
+s1_brut_label   = f"Profit brut ({profit_net_pct_funded:.2f}% x ${one_pct_funded_usd:,.0f})"
+s1_brut_val     = f"+ ${profit_brut_funded_usd:,.2f}"
+s1_split_label  = f"Profit dupa split ({f_profit_pct}%)"
+s1_split_val    = f"+ ${profit_brut_dupa_split:,.2f}"
+s1_cost_val     = f"- ${total_cost:,.2f}"
+s1_net_val      = f"{net1_sign}${net1:,.2f}"
 
 with sc1:
-    st.markdown(f"""
-    <div style="background:#0d1a10; border:1px solid #00cf8d; border-left:4px solid #00cf8d;
-                border-radius:10px; padding:20px;">
-        <div style="color:#00cf8d; font-weight:bold; font-size:15px; margin-bottom:4px;">
-            Scenariul 1 &mdash; {cont_tip} face Breach
-        </div>
-        <div style="color:#8b949e; font-size:12px; margin-bottom:16px;">
-            Challenge-ul pierde {c_max_loss_pct:.0f}% &rarr; Funded c&acirc;&ordm;tig&acirc; din hedge
-        </div>
+    st.markdown(f"""<div style="background:#0d1a10;border:1px solid #00cf8d;border-left:4px solid #00cf8d;border-radius:10px;padding:20px;">
+<div style="color:#00cf8d;font-weight:bold;font-size:15px;margin-bottom:4px;">{s1_title}</div>
+<div style="color:#8b949e;font-size:12px;margin-bottom:16px;">{s1_sub}</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
+<div style="background:#0e1117;padding:10px;border-radius:8px;text-align:center;">
+<div style="color:#8b949e;font-size:11px;margin-bottom:4px;">{s1_risc_label}</div>
+<div style="color:white;font-size:18px;font-weight:bold;">{s1_risc_val}</div>
+</div>
+<div style="background:#0e1117;padding:10px;border-radius:8px;text-align:center;">
+<div style="color:#8b949e;font-size:11px;margin-bottom:4px;">Funded curent</div>
+<div style="color:{f_cur_color};font-size:18px;font-weight:bold;">{s1_fcur_val}</div>
+</div>
+</div>
+<div style="background:#0e1117;border-radius:8px;padding:12px;margin-bottom:14px;">
+<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px;">
+<span style="color:#8b949e;">Profit net realizabil</span>
+<span style="color:white;font-weight:bold;">{s1_pnf_val} {s1_formula}</span>
+</div>
+<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px;">
+<span style="color:#8b949e;">Valoare 1% din Funded</span>
+<span style="color:white;font-weight:bold;">{s1_1pct_val}</span>
+</div>
+<div style="display:flex;justify-content:space-between;font-size:13px;">
+<span style="color:#8b949e;">{s1_brut_label}</span>
+<span style="color:#00cf8d;font-weight:bold;">{s1_brut_val}</span>
+</div>
+</div>
+<div style="border-top:1px solid #1e2530;padding-top:12px;">
+<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;">
+<span style="color:#8b949e;">{s1_split_label}</span>
+<span style="color:#00cf8d;">{s1_split_val}</span>
+</div>
+<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:10px;">
+<span style="color:#8b949e;">Costuri achizitie conturi</span>
+<span style="color:#ffa500;">{s1_cost_val}</span>
+</div>
+<div style="display:flex;justify-content:space-between;align-items:center;">
+<span style="color:white;font-weight:bold;font-size:14px;">NET FINAL</span>
+<span style="color:{net1_color};font-size:22px;font-weight:bold;">{s1_net_val}</span>
+</div>
+</div>
+</div>""", unsafe_allow_html=True)
 
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px;">
-            <div style="background:#0e1117; padding:10px; border-radius:8px; text-align:center;">
-                <div style="color:#8b949e; font-size:11px; margin-bottom:4px;">Risc r&acirc;mas {cont_tip}</div>
-                <div style="color:white; font-size:18px; font-weight:bold;">{c_risc_fmt}</div>
-            </div>
-            <div style="background:#0e1117; padding:10px; border-radius:8px; text-align:center;">
-                <div style="color:#8b949e; font-size:11px; margin-bottom:4px;">Funded curent</div>
-                <div style="color:{f_cur_color}; font-size:18px; font-weight:bold;">{f_cur_fmt}</div>
-            </div>
-        </div>
-
-        <div style="background:#0e1117; border-radius:8px; padding:12px; margin-bottom:14px;">
-            <div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:13px;">
-                <span style="color:#8b949e;">Profit net realizabil pe Funded</span>
-                <span style="color:white; font-weight:bold;">{pnf_fmt}
-                    <span style="color:#8b949e; font-size:11px;">({formula_str})</span>
-                </span>
-            </div>
-            <div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:13px;">
-                <span style="color:#8b949e;">Valoare 1% din Funded</span>
-                <span style="color:white; font-weight:bold;">{one_pct_fmt}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; font-size:13px;">
-                <span style="color:#8b949e;">Profit brut ({pnf_fmt} &times; {one_pct_fmt})</span>
-                <span style="color:#00cf8d; font-weight:bold;">+ {profit_brut_fmt}</span>
-            </div>
-        </div>
-
-        <div style="border-top:1px solid #1e2530; padding-top:12px;">
-            <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px;">
-                <span style="color:#8b949e;">Profit dup&acirc; split ({f_profit_pct}%)</span>
-                <span style="color:#00cf8d;">+ {split_fmt}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:10px;">
-                <span style="color:#8b949e;">Costuri achizi&tcedil;ie conturi</span>
-                <span style="color:#ffa500;">&minus; {cost_fmt1}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span style="color:white; font-weight:bold; font-size:14px;">NET FINAL</span>
-                <span style="color:{net1_color}; font-size:22px; font-weight:bold;">{net1_fmt}</span>
-            </div>
-        </div>
-    </div>""", unsafe_allow_html=True)
-
-# ── Scenariul 2 — pre-calculăm tot ──
+# ── Scenariul 2 — toate valorile pre-calculate ──
 new_funded_profit_usd = c_target_usd * (f_profit_pct / 100) if "PH" in cont_tip else 0
 funded_breach_usd     = f_max_loss_usd
 net2                  = new_funded_profit_usd - funded_breach_usd - total_cost
 net2_color            = "#00cf8d" if net2 >= 0 else "#ff6b6b"
 net2_sign             = "+" if net2 >= 0 else ""
-sc2_title             = f"{cont_tip} Trece &rarr; Cont Funded ${c_size:,.0f}"
-sc2_subtitle          = (f"PH2 atinge {c_profit_target_pct:.0f}% target &rarr; devii Funded pe ${c_size:,.0f}"
-                         if "PH" in cont_tip else "Ambele conturi Funded")
-new_profit_fmt        = f"${new_funded_profit_usd:,.2f}"
-breach_fmt            = f"${funded_breach_usd:,.2f}"
-cost_fmt2             = f"${total_cost:,.2f}"
-net2_fmt              = f"{net2_sign}${net2:,.2f}"
-c_size_fmt            = f"${c_size:,.0f}"
+
+s2_title    = f"Scenariul 2 - {cont_tip} Trece - Cont Funded ${c_size:,.0f}"
+s2_sub      = (f"PH2 atinge {c_profit_target_pct:.0f}% target - devii Funded pe ${c_size:,.0f}"
+               if "PH" in cont_tip else "Ambele conturi Funded")
+s2_tgt_lbl  = f"Target {cont_tip} ({c_profit_target_pct:.0f}% din ${c_size:,.0f})"
+s2_tgt_val  = f"Funded ${c_size:,.0f}"
+s2_pay_lbl  = f"Profit primul payout nou funded ({f_profit_pct}% split)"
+s2_pay_val  = f"+ ${new_funded_profit_usd:,.2f}"
+s2_loss_val = f"- ${funded_breach_usd:,.2f}"
+s2_cost_val = f"- ${total_cost:,.2f}"
+s2_net_val  = f"{net2_sign}${net2:,.2f}"
+s2_cap_val  = f"${c_size:,.0f}"
 
 with sc2:
-    st.markdown(f"""
-    <div style="background:#0d1a2e; border:1px solid #4a9eff; border-left:4px solid #4a9eff;
-                border-radius:10px; padding:20px;">
-        <div style="color:#4a9eff; font-weight:bold; font-size:15px; margin-bottom:4px;">
-            Scenariul 2 &mdash; {sc2_title}
-        </div>
-        <div style="color:#8b949e; font-size:12px; margin-bottom:16px;">{sc2_subtitle}</div>
-
-        <div style="background:#0e1117; border-radius:8px; padding:12px; margin-bottom:14px;">
-            <div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:13px;">
-                <span style="color:#8b949e;">Target {cont_tip} ({c_profit_target_pct:.0f}% din {c_size_fmt})</span>
-                <span style="color:#4a9eff; font-weight:bold;">&rarr; Funded {c_size_fmt}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:13px;">
-                <span style="color:#8b949e;">Profit primul payout nou funded ({f_profit_pct}% split)</span>
-                <span style="color:#00cf8d; font-weight:bold;">+ {new_profit_fmt}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; font-size:13px;">
-                <span style="color:#8b949e;">Pierdere Funded mic (breach &icirc;n hedge)</span>
-                <span style="color:#ff6b6b; font-weight:bold;">&minus; {breach_fmt}</span>
-            </div>
-        </div>
-
-        <div style="border-top:1px solid #1e2530; padding-top:12px;">
-            <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px;">
-                <span style="color:#8b949e;">Costuri totale achizi&tcedil;ie</span>
-                <span style="color:#ffa500;">&minus; {cost_fmt2}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <span style="color:white; font-weight:bold; font-size:14px;">NET FINAL</span>
-                <span style="color:{net2_color}; font-size:22px; font-weight:bold;">{net2_fmt}</span>
-            </div>
-            <div style="background:#0e1117; border-radius:6px; padding:8px; text-align:center; font-size:12px; color:#8b949e;">
-                + acces la capital finan&tcedil;at de <span style="color:#4a9eff; font-weight:bold;">{c_size_fmt}</span>
-            </div>
-        </div>
-    </div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div style="background:#0d1a2e;border:1px solid #4a9eff;border-left:4px solid #4a9eff;border-radius:10px;padding:20px;">
+<div style="color:#4a9eff;font-weight:bold;font-size:15px;margin-bottom:4px;">{s2_title}</div>
+<div style="color:#8b949e;font-size:12px;margin-bottom:16px;">{s2_sub}</div>
+<div style="background:#0e1117;border-radius:8px;padding:12px;margin-bottom:14px;">
+<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px;">
+<span style="color:#8b949e;">{s2_tgt_lbl}</span>
+<span style="color:#4a9eff;font-weight:bold;">{s2_tgt_val}</span>
+</div>
+<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px;">
+<span style="color:#8b949e;">{s2_pay_lbl}</span>
+<span style="color:#00cf8d;font-weight:bold;">{s2_pay_val}</span>
+</div>
+<div style="display:flex;justify-content:space-between;font-size:13px;">
+<span style="color:#8b949e;">Pierdere Funded mic (breach in hedge)</span>
+<span style="color:#ff6b6b;font-weight:bold;">{s2_loss_val}</span>
+</div>
+</div>
+<div style="border-top:1px solid #1e2530;padding-top:12px;">
+<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;">
+<span style="color:#8b949e;">Costuri totale achizitie</span>
+<span style="color:#ffa500;">{s2_cost_val}</span>
+</div>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+<span style="color:white;font-weight:bold;font-size:14px;">NET FINAL</span>
+<span style="color:{net2_color};font-size:22px;font-weight:bold;">{s2_net_val}</span>
+</div>
+<div style="background:#0e1117;border-radius:6px;padding:8px;text-align:center;font-size:12px;color:#4a9eff;font-weight:bold;">+ acces la capital de {s2_cap_val}</div>
+</div>
+</div>""", unsafe_allow_html=True)
 
 # ── SUMAR COSTURI ──
 st.markdown("")
