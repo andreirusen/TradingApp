@@ -357,10 +357,7 @@ def simulate_allocation_strategy(df, method, num_accounts, account_size, payout_
     df_sorted = df.sort_values('Entry Time').copy()
     empty_ret = {"total_payout": 0.0, "cycles": [], "accounts_survived": num_accounts,
                  "blown_count": 0, "first_blown_date": None, "num_accounts": num_accounts,
-                 "net_profit_per_account": 0.0, "method": method,
-                 "deepest_dd": [0.0]*num_accounts, "worst_dd_usd": 0.0, "worst_dd_pct": 0.0,
-                 "avg_dd_usd": 0.0, "avg_dd_pct": 0.0, "dd_used_pct": 0.0,
-                 "headroom_pct": 100.0, "max_safe_risk": None}
+                 "net_profit_per_account": 0.0, "method": method}
     if df_sorted.empty or num_accounts < 1:
         return empty_ret
 
@@ -369,7 +366,6 @@ def simulate_allocation_strategy(df, method, num_accounts, account_size, payout_
     balances = [0.0] * num_accounts
     peaks = [0.0] * num_accounts
     active = [True] * num_accounts
-    deepest_dd = [0.0] * num_accounts  # cel mai adânc drawdown atins de fiecare cont ($, negativ)
 
     payout_interval = timedelta(days=payout_days)
     cycle_start = df_sorted['Entry Time'].iloc[0]
@@ -384,18 +380,14 @@ def simulate_allocation_strategy(df, method, num_accounts, account_size, payout_
         return pnl_real
 
     def apply_to_account(i, applied, when):
-        """Aplică P&L pe contul i, actualizează peak, urmărește drawdown-ul, verifică blown."""
+        """Aplică P&L pe contul i, actualizează peak, verifică blown."""
         nonlocal first_blown_date
         if not active[i]:
             return
         balances[i] += applied
         if balances[i] > peaks[i]:
             peaks[i] = balances[i]
-        # drawdown curent de la peak
-        dd_now = balances[i] - peaks[i]
-        if dd_now < deepest_dd[i]:
-            deepest_dd[i] = dd_now
-        if dd_now <= -max_dd_usd:
+        if (balances[i] - peaks[i]) <= -max_dd_usd:
             active[i] = False
             if first_blown_date is None:
                 first_blown_date = when
@@ -486,25 +478,6 @@ def simulate_allocation_strategy(df, method, num_accounts, account_size, payout_
     else:
         net_profit_per_account = float(df_sorted['Net P&L USD'].sum())
 
-    # ── Statistici drawdown per metodă ──
-    worst_dd_usd = min(deepest_dd) if deepest_dd else 0.0          # cel mai adânc dintre conturi ($)
-    avg_dd_usd = sum(deepest_dd) / len(deepest_dd) if deepest_dd else 0.0  # media pe conturi ($)
-    worst_dd_pct = abs(worst_dd_usd) / account_size * 100 if account_size > 0 else 0.0
-    avg_dd_pct = abs(avg_dd_usd) / account_size * 100 if account_size > 0 else 0.0
-
-    # ── Marjă de risc: cât spațiu a mai rămas până la pragul de blown ──
-    # headroom = cât % din prag NU a fost consumat de cel mai lovit cont
-    dd_used_pct = (abs(worst_dd_usd) / max_dd_usd * 100) if max_dd_usd > 0 else 0.0
-    headroom_pct = max(0.0, 100.0 - dd_used_pct)  # cât din bufferul de DD a rămas neatins
-
-    # ── Risc maxim recomandabil per trade (fără să pierzi conturi) ──
-    # dacă cel mai adânc DD a folosit dd_used_pct% din prag la riscul curent,
-    # poți scala riscul proporțional până umpli pragul (cu o marjă de siguranță de 20%)
-    if dd_used_pct > 0 and risk_per_trade_pct is not None:
-        max_safe_risk = risk_per_trade_pct * (100.0 / dd_used_pct) * 0.8
-    else:
-        max_safe_risk = None
-
     return {
         "total_payout": total_payout,
         "cycles": cycles,
@@ -514,14 +487,6 @@ def simulate_allocation_strategy(df, method, num_accounts, account_size, payout_
         "num_accounts": num_accounts,
         "net_profit_per_account": net_profit_per_account,
         "method": method,
-        "deepest_dd": deepest_dd,                # listă: cel mai adânc DD per cont ($)
-        "worst_dd_usd": worst_dd_usd,            # cel mai adânc dintre toate conturile ($)
-        "worst_dd_pct": worst_dd_pct,            # idem în % din cont
-        "avg_dd_usd": avg_dd_usd,                # media DD pe conturi ($)
-        "avg_dd_pct": avg_dd_pct,                # idem %
-        "dd_used_pct": dd_used_pct,              # cât % din pragul de blown a fost consumat
-        "headroom_pct": headroom_pct,            # cât % din buffer a rămas
-        "max_safe_risk": max_safe_risk,          # risc/trade recomandat (dacă normalizat)
     }
 
 
@@ -1376,18 +1341,10 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
         border = "#00cf8d" if is_winner else "#30363d"
         bg = "#0d2111" if is_winner else "#161b22"
         pct_vs_best = (payout / winner_payout * 100) if winner_payout > 0 else 0
-        # info drawdown
-        worst_dd = abs(res["worst_dd_usd"])
-        worst_dd_pct = res["worst_dd_pct"]
-        avg_dd = abs(res["avg_dd_usd"])
-        used = res["dd_used_pct"]
-        # culoarea barei de suferință: verde<50%, portocaliu<80%, roșu peste
-        dd_color = "#00cf8d" if used < 50 else ("#ffa500" if used < 80 else "#ff4b4b")
-        dd_fill = min(100, used)
         with m_cols[idx % 2]:
             st.markdown(f"""
                 <div style="background:{bg}; border:1px solid {border}; border-left:5px solid {border};
-                            border-radius:10px; padding:15px; margin-bottom:10px; min-height:210px;">
+                            border-radius:10px; padding:15px; margin-bottom:10px; min-height:150px;">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <span style="font-size:15px; font-weight:bold; color:white;">{medals[idx]} {mdata["name"]}</span>
                         <span style="font-size:11px; color:{'#00cf8d' if is_winner else '#8b949e'};">
@@ -1398,19 +1355,6 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
                     <p style="margin:0 0 8px 0; font-size:12px; color:{'#ffa500' if surv < m_acc else '#8b949e'};">
                         {surv}/{m_acc} conturi supraviețuiesc
                     </p>
-                    <div style="background:#0e1117; border-radius:6px; padding:8px; margin-bottom:8px;">
-                        <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:4px;">
-                            <span style="color:#8b949e;">📉 Cel mai lovit cont</span>
-                            <span style="color:{dd_color}; font-weight:bold;">-${worst_dd:,.0f} ({worst_dd_pct:.1f}%)</span>
-                        </div>
-                        <div style="background:#000; border-radius:4px; height:8px; overflow:hidden; margin-bottom:4px;">
-                            <div style="background:{dd_color}; width:{dd_fill}%; height:100%;"></div>
-                        </div>
-                        <div style="display:flex; justify-content:space-between; font-size:10px; color:#666;">
-                            <span>{used:.0f}% din buffer folosit</span>
-                            <span>media: -${avg_dd:,.0f}</span>
-                        </div>
-                    </div>
                     <p style="margin:0; font-size:12px; color:#8b949e; line-height:1.4;">{mdata["desc"]}</p>
                 </div>""", unsafe_allow_html=True)
 
@@ -1438,7 +1382,7 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
     st.plotly_chart(fig_m, use_container_width=True, key=f"methods_compare_{title_prefix}")
 
     # ── Tabel detaliat ──
-    with st.expander("📋 Tabel detaliat pe metode (inclusiv drawdown)"):
+    with st.expander("📋 Tabel detaliat pe metode"):
         table_rows = []
         for mkey, mdata in ranking:
             res = mdata["res"]
@@ -1446,121 +1390,18 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
             table_rows.append({
                 "Metodă": mdata["name"],
                 "Payout Total": f"${res['total_payout']:,.2f}",
-                "Cel mai lovit cont": f"-${abs(res['worst_dd_usd']):,.0f} ({res['worst_dd_pct']:.1f}%)",
-                "DD mediu / cont": f"-${abs(res['avg_dd_usd']):,.0f} ({res['avg_dd_pct']:.1f}%)",
-                "Buffer folosit": f"{res['dd_used_pct']:.0f}%",
-                "Supraviețuiesc": f"{res['accounts_survived']}/{m_acc}",
+                "Conturi Supraviețuite": f"{res['accounts_survived']}/{m_acc}",
+                "Blown": res["blown_count"],
                 "Primul Blown": fb.strftime('%d %b %Y') if fb else "—",
+                "Cicluri": len(res["cycles"]),
             })
         st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
-    # ── RECOMANDARE DE RISC ──
-    st.markdown("#### 🛡️ Recomandare de Risc — cât poți risca fără să pierzi conturi")
-
-    # calculăm pentru fiecare metodă cât buffer a rămas și ce risc ar fi sigur
-    max_dd_usd_ref = m_size * (m_dd / 100.0)
-    rec_c1, rec_c2 = st.columns(2)
-
-    # metoda câștigătoare (profit) și cea mai "blândă" (cel mai mic worst DD)
-    safest_key = min(method_results.items(), key=lambda kv: abs(kv[1]["res"]["worst_dd_usd"]))[0]
-
-    with rec_c1:
-        wres = method_results[winner_key]["res"]
-        w_used = wres["dd_used_pct"]
-        w_headroom = wres["headroom_pct"]
-        w_color = "#00cf8d" if w_used < 60 else ("#ffa500" if w_used < 85 else "#ff4b4b")
-        w_verdict = ("✅ Marjă confortabilă" if w_used < 60 else
-                     "⚠️ Marjă redusă — atenție" if w_used < 85 else
-                     "🔴 Foarte aproape de blown")
-        st.markdown(f"""
-            <div style="background:#161b22; border:1px solid {w_color}; border-left:5px solid {w_color};
-                        border-radius:10px; padding:16px;">
-                <p style="margin:0 0 4px 0; font-size:12px; color:#8b949e; text-transform:uppercase;">
-                    Metoda cea mai profitabilă
-                </p>
-                <p style="margin:0 0 10px 0; font-size:15px; font-weight:bold; color:white;">
-                    {method_results[winner_key]['name']}
-                </p>
-                <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px;">
-                    <span style="color:#8b949e;">Cel mai lovit cont:</span>
-                    <span style="color:{w_color}; font-weight:bold;">-${abs(wres['worst_dd_usd']):,.0f} din ${max_dd_usd_ref:,.0f} prag</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:10px;">
-                    <span style="color:#8b949e;">Marjă rămasă până la blown:</span>
-                    <span style="color:{w_color}; font-weight:bold;">{w_headroom:.0f}%</span>
-                </div>
-                <p style="margin:0; font-size:13px; color:{w_color}; font-weight:bold;">{w_verdict}</p>
-            </div>""", unsafe_allow_html=True)
-
-    with rec_c2:
-        sres = method_results[safest_key]["res"]
-        s_used = sres["dd_used_pct"]
-        st.markdown(f"""
-            <div style="background:#161b22; border:1px solid #4a9eff; border-left:5px solid #4a9eff;
-                        border-radius:10px; padding:16px;">
-                <p style="margin:0 0 4px 0; font-size:12px; color:#8b949e; text-transform:uppercase;">
-                    Metoda cea mai blândă (mentalitate)
-                </p>
-                <p style="margin:0 0 10px 0; font-size:15px; font-weight:bold; color:white;">
-                    {method_results[safest_key]['name']}
-                </p>
-                <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px;">
-                    <span style="color:#8b949e;">Cel mai lovit cont:</span>
-                    <span style="color:#4a9eff; font-weight:bold;">-${abs(sres['worst_dd_usd']):,.0f} ({sres['worst_dd_pct']:.1f}%)</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:10px;">
-                    <span style="color:#8b949e;">Marjă rămasă până la blown:</span>
-                    <span style="color:#4a9eff; font-weight:bold;">{sres['headroom_pct']:.0f}%</span>
-                </div>
-                <p style="margin:0; font-size:13px; color:#4a9eff;">
-                    Cel mai puțin stres per cont — bun dacă vrei liniște, chiar dacă profitul e mai mic.
-                </p>
-            </div>""", unsafe_allow_html=True)
-
-    # ── Recomandare concretă de risc per trade (dacă normalizat) sau de scalare cont ──
-    st.write("")
-    if m_norm and method_results[winner_key]["res"]["max_safe_risk"] is not None:
-        msr = method_results[winner_key]["res"]["max_safe_risk"]
-        cur_risk = m_risk
-        if msr > cur_risk:
-            st.success(
-                f"📊 **Recomandare risc:** pe metoda {method_results[winner_key]['name']}, cel mai adânc drawdown a folosit "
-                f"{method_results[winner_key]['res']['dd_used_pct']:.0f}% din pragul de blown la riscul actual de **{cur_risk}%**. "
-                f"Ai marjă să crești până la ~**{msr:.2f}%** per trade fără să pierzi conturi (cu marjă de siguranță de 20%). "
-                f"Mai mult de atât și rișți blown pe o serie proastă ca cea din date."
-            )
-        else:
-            st.warning(
-                f"⚠️ **Recomandare risc:** la {cur_risk}% per trade, cel mai adânc drawdown a consumat deja "
-                f"{method_results[winner_key]['res']['dd_used_pct']:.0f}% din prag pe metoda {method_results[winner_key]['name']}. "
-                f"Pentru siguranță, **redu riscul la ~{msr:.2f}%** per trade — la nivelul actual, o serie proastă ca cea din istoric "
-                f"te-ar putea lăsa fără conturi."
-            )
-    else:
-        # fără normalizare: recomandare bazată pe headroom și mărimea contului
-        w_headroom = method_results[winner_key]["res"]["headroom_pct"]
-        worst_dd_pct_w = method_results[winner_key]["res"]["worst_dd_pct"]
-        if w_headroom > 40:
-            st.success(
-                f"📊 **Recomandare:** pe metoda {method_results[winner_key]['name']}, cel mai lovit cont a atins "
-                f"{worst_dd_pct_w:.1f}% drawdown, sub pragul de {m_dd}%. Ai o marjă de **{w_headroom:.0f}%** — "
-                f"pozițiile tale actuale sunt sustenabile pe conturi de ${m_size:,.0f}. "
-                f"Bifează „Normalizează la risc fix\" mai sus pentru o recomandare exactă de % per trade."
-            )
-        else:
-            suggested_size = m_size * (worst_dd_pct_w / (m_dd * 0.8)) if m_dd > 0 else m_size
-            st.warning(
-                f"⚠️ **Recomandare:** pe metoda {method_results[winner_key]['name']}, cel mai lovit cont a atins "
-                f"{worst_dd_pct_w:.1f}% drawdown — foarte aproape de pragul de {m_dd}%. "
-                f"Ai doar **{w_headroom:.0f}%** marjă. Ia în calcul un cont mai mare (~${suggested_size:,.0f}) "
-                f"sau redu mărimea pozițiilor ca să ai buffer."
-            )
-
     st.markdown(
-        "<small style='color:#8b949e;'>ℹ️ „Cel mai lovit cont\" = cel mai adânc drawdown de la vârf atins de vreun cont pe parcurs. "
-        "„Buffer folosit\" = cât % din pragul de blown a fost consumat de cel mai afectat cont. "
-        "<b>Copy toate</b> face profit maxim dar toate conturile suferă la fel; <b>individual/load-balance</b> "
-        "distribuie suferința — profit mai mic, dar mai puțin stres per cont și risc mai mic de blown simultan.</small>",
+        "<small style='color:#8b949e;'>ℹ️ <b>Copy toate</b> maximizează profitul dacă toate conturile supraviețuiesc "
+        "(fiecare cont face profitul întreg). <b>Individual</b> și <b>load-balance</b> împart trade-urile, "
+        "deci fac mai puțin profit total — dar reduc riscul ca toate conturile să fie blown simultan de o serie proastă. "
+        "Compromisul e între <b>profit maxim</b> (copy) și <b>diversificarea riscului</b> (individual/load-balance).</small>",
         unsafe_allow_html=True
     )
 
