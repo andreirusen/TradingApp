@@ -407,7 +407,7 @@ def render_risk_management(df):
     st.markdown("### ⚙️ Configurare Manuală Cont")
     col_a, col_b, col_c, col_d = st.columns(4)
     with col_a:
-        account_size = st.number_input("Mărime Cont ($):", min_value=1000, max_value=500000, value=25000, step=1000)
+        account_size = st.number_input("Mărime Cont ($):", min_value=1000, max_value=500000, value=100000, step=1000)
     with col_b:
         daily_dd_pct = st.slider("Daily Max Drawdown (%):", 1, 15, 5)
     with col_c:
@@ -633,7 +633,7 @@ def render_monte_carlo(df):
     st.markdown("### ⚙️ Configurare")
     mc_c1, mc_c2, mc_c3, mc_c4, mc_c5 = st.columns(5)
     with mc_c1:
-        mc_account = st.number_input("Cont ($):", min_value=1000, max_value=500000, value=25000, step=1000, key="mc_account")
+        mc_account = st.number_input("Cont ($):", min_value=1000, max_value=500000, value=100000, step=1000, key="mc_account")
     with mc_c2:
         mc_daily_dd = st.slider("Daily DD (%):", 1, 15, 5, key="mc_daily_dd")
     with mc_c3:
@@ -920,7 +920,7 @@ def render_advanced_analysis(df):
 
     bench_col1, bench_col2 = st.columns(2)
     with bench_col1:
-        bench_capital = st.number_input("Capital inițial ($):", min_value=1000, max_value=500000, value=25000, step=1000, key="bench_cap")
+        bench_capital = st.number_input("Capital inițial ($):", min_value=1000, max_value=500000, value=100000, step=1000, key="bench_cap")
     with bench_col2:
         spy_annual_return = st.slider("Return anual estimat SPY (%):", 5, 20, 10)
 
@@ -1136,7 +1136,7 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
     ct_c1, ct_c2, ct_c3 = st.columns(3)
     with ct_c1:
         ct_acc_size = st.number_input("Mărime cont ($):", min_value=1000, max_value=500000,
-                                      value=25000, step=1000, key=f"ct_size_{title_prefix}")
+                                      value=100000, step=1000, key=f"ct_size_{title_prefix}")
     with ct_c2:
         ct_max_dd = st.slider("Max Drawdown per cont (%):", 1, 20, 10, key=f"ct_dd_{title_prefix}")
     with ct_c3:
