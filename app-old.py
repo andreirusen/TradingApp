@@ -215,107 +215,6 @@ def simulate_payout_timeline(df, num_accounts, payout_days):
     return total_payout_sum, payout_cycles, account_balances
 
 
-def simulate_copy_trading(df, num_accounts, account_size, payout_days, max_dd_pct, risk_per_trade_pct=None):
-    """
-    Simulare COPY-TRADING: toate conturile iau EXACT aceleași trade-uri (în paralel).
-    Un cont e 'blown' când drawdown-ul de la peak depășește max_dd_pct din account_size.
-    Conturile blown nu mai contribuie la payout.
-
-    Params:
-      df                : dataframe cu trade-urile (are 'Entry Time', 'Net P&L USD')
-      num_accounts      : câte conturi rulează simultan
-      account_size      : mărimea unui cont ($) — pentru pragul de drawdown
-      payout_days       : lungimea unui ciclu de payout (zile)
-      max_dd_pct        : max drawdown permis (%) înainte de blown
-      risk_per_trade_pct: dacă e setat, normalizează P&L la % din cont (risc fix per trade);
-                          dacă e None, folosește P&L-ul real din date (scalat 1:1)
-
-    Returnează dict cu:
-      total_payout, cycles (listă), accounts_survived, first_blown_date, blown_count
-    """
-    df_sorted = df.sort_values('Entry Time').copy()
-    if df_sorted.empty:
-        return {"total_payout": 0.0, "cycles": [], "accounts_survived": num_accounts,
-                "blown_count": 0, "first_blown_date": None, "num_accounts": num_accounts}
-
-    max_dd_usd = account_size * (max_dd_pct / 100.0)
-
-    # Fiecare cont: cumulativ, peak, activ/blown. Toate iau aceleași trade-uri.
-    balances = [0.0] * num_accounts
-    peaks = [0.0] * num_accounts
-    active = [True] * num_accounts
-
-    payout_interval = timedelta(days=payout_days)
-    cycle_start = df_sorted['Entry Time'].iloc[0]
-    cycle_start_balances = [0.0] * num_accounts  # balanța la începutul ciclului per cont
-    cycles = []
-    trades_in_cycle = 0
-    first_blown_date = None
-
-    def close_cycle(end_time):
-        """Payout ciclu = suma profitului pozitiv realizat în ciclu de conturile active."""
-        cycle_payout = 0.0
-        for i in range(num_accounts):
-            gain_in_cycle = balances[i] - cycle_start_balances[i]
-            # doar conturile care au fost active și au profit pozitiv în ciclu
-            if gain_in_cycle > 0:
-                cycle_payout += gain_in_cycle
-        worst_dd = min([balances[i] - peaks[i] for i in range(num_accounts)]) if num_accounts else 0.0
-        cycles.append({
-            "Interval": f"{cycle_start.strftime('%d %b')} - {end_time.strftime('%d %b')}",
-            "Payout": cycle_payout,
-            "Max DD Ciclu": worst_dd,
-            "Trades": trades_in_cycle,
-            "Conturi Active": sum(active),
-            "Luna": cycle_start.strftime('%B %Y'),
-        })
-
-    for _, row in df_sorted.iterrows():
-        # verificăm dacă trebuie închis ciclul curent
-        if row['Entry Time'] >= cycle_start + payout_interval:
-            close_cycle(cycle_start + payout_interval)
-            cycle_start = row['Entry Time']
-            cycle_start_balances = balances.copy()
-            trades_in_cycle = 0
-
-        pnl_real = row['Net P&L USD']
-
-        # aplicăm trade-ul pe fiecare cont ACTIV
-        for i in range(num_accounts):
-            if not active[i]:
-                continue
-            # normalizare opțională la risc fix per trade
-            if risk_per_trade_pct is not None:
-                unit = account_size * (risk_per_trade_pct / 100.0)
-                applied = unit if pnl_real > 0 else -unit
-            else:
-                applied = pnl_real
-
-            balances[i] += applied
-            if balances[i] > peaks[i]:
-                peaks[i] = balances[i]
-            # check blown (drawdown de la peak)
-            if (balances[i] - peaks[i]) <= -max_dd_usd:
-                active[i] = False
-                if first_blown_date is None:
-                    first_blown_date = row['Entry Time']
-
-        trades_in_cycle += 1
-
-    # închide ultimul ciclu
-    close_cycle(df_sorted['Entry Time'].iloc[-1])
-
-    total_payout = sum(c["Payout"] for c in cycles)
-    return {
-        "total_payout": total_payout,
-        "cycles": cycles,
-        "accounts_survived": sum(active),
-        "blown_count": num_accounts - sum(active),
-        "first_blown_date": first_blown_date,
-        "num_accounts": num_accounts,
-    }
-
-
 def render_weekly_calendar(df, title_key):
     st.markdown("### 📅 Calendar Profit Săptămânal")
 
@@ -1097,150 +996,6 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
     else:
         st.info(f"Nu există suficiente date pentru a completa un ciclu de {payout_days} zile.")
 
-    # ═══════════════════════════════════════════════════════════
-    # 🔄 COMPARAȚIE STRATEGII COPY-TRADING (1 vs 2 vs 3 vs 4 conturi)
-    # ═══════════════════════════════════════════════════════════
-    st.markdown("---")
-    st.markdown("### 🔄 Comparație Strategii Copy-Trading")
-    st.markdown(
-        "<p style='color:#8b949e; font-size:14px;'>Toate conturile iau <b>exact aceleași trade-uri</b> în paralel. "
-        "Compară cât face dacă rulezi 1, 2, 3 sau 4 conturi simultan. "
-        "Un cont care lovește max drawdown iese din joc (blown).</p>",
-        unsafe_allow_html=True
-    )
-
-    ct_c1, ct_c2, ct_c3 = st.columns(3)
-    with ct_c1:
-        ct_acc_size = st.number_input("Mărime cont ($):", min_value=1000, max_value=500000,
-                                      value=25000, step=1000, key=f"ct_size_{title_prefix}")
-    with ct_c2:
-        ct_max_dd = st.slider("Max Drawdown per cont (%):", 1, 20, 10, key=f"ct_dd_{title_prefix}")
-    with ct_c3:
-        ct_max_accounts = st.slider("Nr. maxim conturi de comparat:", 2, 8, 4, key=f"ct_maxacc_{title_prefix}")
-
-    ct_norm = st.checkbox(
-        "Normalizează la risc fix per trade (recomandat pentru funded)",
-        value=False, key=f"ct_norm_{title_prefix}",
-        help="Dacă e bifat, fiecare trade riscă un procent fix din cont (nu P&L-ul brut din date). "
-             "Util dacă în date ai poziții de mărimi diferite."
-    )
-    ct_risk = None
-    if ct_norm:
-        ct_risk = st.select_slider("Risc per trade (%):", options=[0.25, 0.5, 0.75, 1.0, 1.5, 2.0],
-                                   value=1.0, key=f"ct_risk_{title_prefix}")
-
-    # Rulăm simularea pentru fiecare nr de conturi × fiecare interval de payout
-    payout_intervals = [7, 14, 30]
-    interval_labels = {7: "7 zile", 14: "14-15 zile", 30: "30 zile"}
-
-    comparison_rows = []
-    detailed_results = {}  # {(n_acc, interval): result}
-
-    for n_acc in range(1, ct_max_accounts + 1):
-        row = {"Strategie": f"{n_acc} cont" + ("uri" if n_acc > 1 else "")}
-        for interval in payout_intervals:
-            res = simulate_copy_trading(
-                df, n_acc, ct_acc_size, interval, ct_max_dd, risk_per_trade_pct=ct_risk
-            )
-            detailed_results[(n_acc, interval)] = res
-            row[f"Payout ({interval_labels[interval]})"] = res["total_payout"]
-            if interval == payout_intervals[-1]:
-                row["Conturi Supraviețuite"] = f"{res['accounts_survived']}/{n_acc}"
-                row["Blown"] = res["blown_count"]
-        comparison_rows.append(row)
-
-    df_compare = pd.DataFrame(comparison_rows)
-
-    # ── Carduri sumar pentru fiecare strategie (bazat pe ciclul de 14 zile) ──
-    st.markdown("#### 💰 Payout Total per Strategie")
-    strat_cols = st.columns(min(ct_max_accounts, 4))
-    for idx, n_acc in enumerate(range(1, min(ct_max_accounts, 4) + 1)):
-        res14 = detailed_results[(n_acc, 14)]
-        with strat_cols[idx]:
-            surv = res14["accounts_survived"]
-            surv_color = "#00cf8d" if surv == n_acc else ("#ffa500" if surv > 0 else "#ff4b4b")
-            payout_val = res14["total_payout"]
-            # profit per cont pentru referință
-            per_acc = payout_val / n_acc if n_acc > 0 else 0
-            st.markdown(f"""
-                <div style="background:#161b22; border:1px solid #30363d; border-left:5px solid {surv_color};
-                            border-radius:10px; padding:15px; text-align:center; height:170px;
-                            display:flex; flex-direction:column; justify-content:center;">
-                    <p style="margin:0; font-size:12px; color:#8b949e; text-transform:uppercase;">
-                        {n_acc} cont{"uri" if n_acc > 1 else ""} în paralel
-                    </p>
-                    <h2 style="color:#00cf8d; margin:8px 0;">${payout_val:,.0f}</h2>
-                    <p style="margin:0; font-size:12px; color:#8b949e;">${per_acc:,.0f} / cont</p>
-                    <p style="margin:6px 0 0 0; font-size:13px; color:{surv_color};">
-                        {surv}/{n_acc} conturi supraviețuiesc
-                    </p>
-                </div>""", unsafe_allow_html=True)
-
-    st.write("")
-
-    # ── Tabel comparativ complet ──
-    st.markdown("#### 📊 Tabel Comparativ (toate intervalele de payout)")
-    df_compare_display = df_compare.copy()
-    for interval in payout_intervals:
-        col = f"Payout ({interval_labels[interval]})"
-        df_compare_display[col] = df_compare_display[col].apply(lambda x: f"${x:,.2f}")
-    st.dataframe(df_compare_display, use_container_width=True, hide_index=True)
-
-    # ── Grafic comparativ ──
-    st.markdown("#### 📈 Payout pe Strategie și Interval")
-    chart_data = []
-    for n_acc in range(1, ct_max_accounts + 1):
-        for interval in payout_intervals:
-            chart_data.append({
-                "Strategie": f"{n_acc} cont" + ("uri" if n_acc > 1 else ""),
-                "Interval": interval_labels[interval],
-                "Payout": detailed_results[(n_acc, interval)]["total_payout"]
-            })
-    df_chart = pd.DataFrame(chart_data)
-    fig_compare = px.bar(
-        df_chart, x="Strategie", y="Payout", color="Interval",
-        barmode="group", template="plotly_dark",
-        title="Payout Total: câte conturi rulezi × ce ciclu de payout folosești",
-        color_discrete_sequence=["#4a9eff", "#00cf8d", "#ffa500"],
-        text_auto=".2s"
-    )
-    fig_compare.update_traces(textposition="outside")
-    fig_compare.update_layout(height=420, margin=dict(t=60, b=40, l=0, r=0),
-                              legend=dict(orientation="h", y=1.02))
-    st.plotly_chart(fig_compare, use_container_width=True, key=f"copytrading_compare_{title_prefix}")
-
-    # ── Insight automat ──
-    best_strategy = max(range(1, ct_max_accounts + 1),
-                        key=lambda n: detailed_results[(n, 14)]["total_payout"])
-    best_payout = detailed_results[(best_strategy, 14)]["total_payout"]
-    all_survive = detailed_results[(ct_max_accounts, 14)]["accounts_survived"] == ct_max_accounts
-
-    if all_survive:
-        st.success(
-            f"🟢 **Toate cele {ct_max_accounts} conturi supraviețuiesc** pe acest istoric — "
-            f"strategia cu {ct_max_accounts} conturi în paralel maximizează payout-ul "
-            f"(${best_payout:,.2f} pe ciclu de 14 zile). Riscul de drawdown e sub prag pe tot parcursul."
-        )
-    else:
-        surv_max = detailed_results[(ct_max_accounts, 14)]["accounts_survived"]
-        first_blown = detailed_results[(ct_max_accounts, 14)]["first_blown_date"]
-        blown_str = first_blown.strftime('%d %b %Y') if first_blown else "N/A"
-        st.warning(
-            f"🟡 La {ct_max_accounts} conturi, doar **{surv_max}/{ct_max_accounts} supraviețuiesc** — "
-            f"primul blown pe {blown_str}. Deoarece toate conturile iau aceleași trade-uri, "
-            f"ele ating pragul de drawdown simultan. Ia în calcul un cont mai mare sau un prag DD mai relaxat. "
-            f"Strategia optimă pe acest istoric: **{best_strategy} cont"
-            f"{'uri' if best_strategy > 1 else ''}** (${best_payout:,.2f} / ciclu 14 zile)."
-        )
-
-    st.markdown(
-        "<small style='color:#8b949e;'>ℹ️ La copy-trading pur, conturile identice se comportă la fel — "
-        "dacă unul se blow-uiește, toate o fac în același punct. Diferența de payout între strategii vine din "
-        "<b>numărul de conturi × profitul per cont</b>. Normalizarea la risc fix face simularea mai realistă "
-        "dacă în date ai poziții de mărimi diferite.</small>",
-        unsafe_allow_html=True
-    )
-
     render_weekly_calendar(df, title_prefix)
 
     st.markdown("### 🎲 Analiză Probabilistică")
@@ -1554,16 +1309,16 @@ with st.expander("💱 Curs Valutar USD → RON", expanded=False):
     _cc1, _cc2 = st.columns(2)
     with _cc1:
         usd_ron = st.number_input("Curs USD → RON:", min_value=1.0, max_value=20.0,
-                                  value=4.60, step=0.0001, format="%.4f", key="usd_ron_tracker")
+                                value=4.60, step=0.0001, format="%.4f", key="usd_ron_tracker")
     with _cc2:
         eur_ron = st.number_input("Curs EUR → RON (opțional):", min_value=1.0, max_value=20.0,
-                                  value=4.97, step=0.0001, format="%.4f", key="eur_ron_tracker")
+                                value=4.97, step=0.0001, format="%.4f", key="eur_ron_tracker")
 
 # ── SELECTARE AN ──
 current_year = datetime.now().year
 available_years = list(range(2022, current_year + 2))
 selected_tracker_year = st.selectbox("📅 An fiscal:", available_years,
-                                     index=available_years.index(current_year))
+                                    index=available_years.index(current_year))
 year_key = str(selected_tracker_year)
 
 if year_key not in st.session_state.payouts_data:
@@ -1713,8 +1468,8 @@ with _ti2:
             </div>""", unsafe_allow_html=True)
     else:
         venit_net_ron_input = st.number_input("Venit net impozabil manual (RON):",
-                                              min_value=0.0, step=100.0, format="%.2f",
-                                              value=max(0.0, profit_net_ron), key=f"venit_manual_{year_key}")
+                                            min_value=0.0, step=100.0, format="%.2f",
+                                            value=max(0.0, profit_net_ron), key=f"venit_manual_{year_key}")
 
 if venit_net_ron_input > 0:
     _t = calculeaza_taxe_alte_surse(venit_net_ron_input, selected_tracker_year)
@@ -1775,7 +1530,7 @@ if venit_net_ron_input > 0:
     with st.expander("📈 Simulare: cum cresc taxele odată cu venitul", expanded=False):
         st.markdown("<small style='color:#8b949e;'>Vezi la ce venituri intri în CASS și cum evoluează rata efectivă de taxare.</small>", unsafe_allow_html=True)
         _praguri_test = [_p['smb']*3, _p['smb']*6, _p['smb']*10, _p['smb']*12,
-                         _p['smb']*24, _p['smb']*40, _p['smb']*60, _p['smb']*80]
+                        _p['smb']*24, _p['smb']*40, _p['smb']*60, _p['smb']*80]
         _rows = []
         for _v in _praguri_test:
             _tt = calculeaza_taxe_alte_surse(_v, selected_tracker_year)
@@ -1845,7 +1600,7 @@ if uploaded_file:
 
         # Detectăm coloana P&L — suportăm toate variantele cunoscute
         _pnl_candidates = ['Net P&L USD', 'Net PnL USD', 'Profit/Loss USD', 'Profit/Loss',
-                           'Net P&L', 'Net PnL', 'PnL USD', 'PnL']
+                        'Net P&L', 'Net PnL', 'PnL USD', 'PnL']
         pnl_col = next((c for c in _pnl_candidates if c in df_combined.columns), None)
         if pnl_col is None:
             df_combined['Net P&L USD'] = 0
@@ -1952,9 +1707,9 @@ if uploaded_file:
                 <div style='padding-top: 4px;'>
                     <button onclick='window.print()'
                         style='width:100%; background:#161b22; color:#e6edf3;
-                               border:1px solid #30363d; border-radius:8px;
-                               padding:10px 0; font-size:14px; cursor:pointer;
-                               margin-top: 0px;'>
+                            border:1px solid #30363d; border-radius:8px;
+                            padding:10px 0; font-size:14px; cursor:pointer;
+                            margin-top: 0px;'>
                         🖨️ Print / Save as PDF din Browser
                     </button>
                 </div>
