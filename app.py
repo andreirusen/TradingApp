@@ -1235,125 +1235,61 @@ with col_mid:
     st.markdown("<h2 style='text-align: center;'></h2>", unsafe_allow_html=True)
 
 # ============================================================
-# TRACKER FINANCIAR — PAYOUT-URI, CONTURI FUNDED & TAXE ANAF
+# TRACKER FINANCIAR — PAYOUT-URI, CONTURI & TAXE ANAF
+# Venituri din "alte surse" (prop trading, firmă/broker nerezident)
 # ============================================================
 
 import json
-import requests as _requests
 from datetime import date as _date
 
-# ── FUNCȚIE PRELUARE CURS BNR PENTRU O DATĂ SPECIFICĂ ──
-def fetch_bnr_rates(target_date: _date) -> dict:
-    """
-    Preia cursul BNR pentru o dată specifică via API public cursbnr.servicii-informatice.ro
-    Returnează dict cu EUR, USD în RON sau None la eroare.
-    """
-    date_str = target_date.strftime("%Y-%m-%d")
-    url = f"https://cursbnr.servicii-informatice.ro/api_public.php?data={date_str}&valute=EUR,USD"
-    try:
-        resp = _requests.get(url, timeout=10)
-        data = resp.json()
-        rates = data.get("rates", {})
-        eur = float(rates.get("EUR", {}).get("valoare", 0))
-        usd = float(rates.get("USD", {}).get("valoare", 0))
-        actual_date = data.get("data", date_str)
-        if eur > 0 and usd > 0:
-            return {"eur": eur, "usd": usd, "data": actual_date, "ok": True}
-    except Exception:
-        pass
-    return {"eur": None, "usd": None, "data": date_str, "ok": False}
-
-def fetch_anaf_tax_info():
-    """Fetch latest ANAF tax info via Claude API for up-to-date rates."""
-    try:
-        resp = _requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"Content-Type": "application/json"},
-            json={
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 1000,
-                "messages": [{
-                    "role": "user",
-                    "content": (
-                        "Returnează DOAR un obiect JSON valid (fără markdown, fără text extra) "
-                        "cu informațiile actualizate despre taxele pentru persoane fizice independente (PFA/freelancer) din România pentru anul curent. "
-                        "Structura exactă:\n"
-                        "{\n"
-                        "  \"an\": <int>,\n"
-                        "  \"salariul_minim_brut\": <float RON>,\n"
-                        "  \"impozit_venit_pct\": <float>,\n"
-                        "  \"cas_pct\": <float>,\n"
-                        "  \"cass_pct\": <float>,\n"
-                        "  \"cas_prag_inferior\": <float RON>,\n"
-                        "  \"cas_prag_superior\": <float RON>,\n"
-                        "  \"cass_prag_inferior\": <float RON>,\n"
-                        "  \"cass_prag_superior\": <float RON>,\n"
-                        "  \"note\": \"<string scurt explicativ>\"\n"
-                        "}\n"
-                        "CAS se calculează dacă venitul net depășește 12 salarii minime brute (plafonat la 24 salarii). "
-                        "CASS se calculează dacă venitul net depășește 6 salarii minime brute (plafonat la 60 salarii). "
-                        "Folosește datele oficiale ANAF pentru anul 2025."
-                    )
-                }]
-            },
-            timeout=15
-        )
-        data = resp.json()
-        text = ""
-        for block in data.get("content", []):
-            if block.get("type") == "text":
-                text += block.get("text", "")
-        text = text.strip().replace("```json", "").replace("```", "").strip()
-        return json.loads(text)
-    except Exception:
-        # Fallback cu valorile 2025 hardcodate
-        return {
-            "an": 2025,
-            "salariul_minim_brut": 4050.0,
-            "impozit_venit_pct": 10.0,
-            "cas_pct": 25.0,
-            "cass_pct": 10.0,
-            "cas_prag_inferior": 4050.0 * 12,
-            "cas_prag_superior": 4050.0 * 24,
-            "cass_prag_inferior": 4050.0 * 6,
-            "cass_prag_superior": 4050.0 * 60,
-            "note": "Date fallback 2025 — verifică manual pe anaf.ro"
-        }
+# ─────────────────────────────────────────────────────────────
+# PARAMETRI FISCALI PE AN (salariu minim de referință + cote)
+# Reper 2025: salariu minim 4.050 RON (HG 1506/2024).
+# Pt "alte surse"/investiții: impozit 10% pe câștigul net,
+# CASS 10% pe praguri (0 sub 6 salarii minime, plafonat la 60),
+# CAS NU se datorează.
+# ─────────────────────────────────────────────────────────────
+FISCAL_PARAMS = {
+    2022: {"smb": 2550.0, "impozit_pct": 10.0, "cass_pct": 10.0},
+    2023: {"smb": 3000.0, "impozit_pct": 10.0, "cass_pct": 10.0},
+    2024: {"smb": 3300.0, "impozit_pct": 10.0, "cass_pct": 10.0},
+    2025: {"smb": 4050.0, "impozit_pct": 10.0, "cass_pct": 10.0},
+    2026: {"smb": 4050.0, "impozit_pct": 10.0, "cass_pct": 10.0},
+}
 
 
-def calculate_taxes_ro(venit_net_ron: float, tax_info: dict) -> dict:
-    """Calculează impozit, CAS și CASS conform pragurilor ANAF."""
-    smb = tax_info["salariul_minim_brut"]
+def get_fiscal_params(an):
+    if an in FISCAL_PARAMS:
+        return FISCAL_PARAMS[an]
+    ani = sorted(FISCAL_PARAMS.keys())
+    return FISCAL_PARAMS[ani[-1]] if an > ani[-1] else FISCAL_PARAMS[ani[0]]
 
-    # Impozit pe venit = 10% aplicat la venitul net
-    impozit = venit_net_ron * (tax_info["impozit_venit_pct"] / 100)
 
-    # CAS — doar dacă depășești 12 SMB
-    cas_baza_min = smb * 12
-    cas_baza_max = smb * 24
-    if venit_net_ron >= cas_baza_min:
-        cas_baza = min(venit_net_ron, cas_baza_max)
-        cas = cas_baza * (tax_info["cas_pct"] / 100)
-    else:
-        cas = 0.0
+def calculeaza_taxe_alte_surse(venit_net_ron, an):
+    """Impozit 10% + CASS pe praguri, fără CAS (venituri din alte surse)."""
+    p = get_fiscal_params(an)
+    smb = p["smb"]
+    venit = max(0.0, venit_net_ron)
+    prag_6 = smb * 6
+    prag_60 = smb * 60
 
-    # CASS — doar dacă depășești 6 SMB
-    cass_baza_min = smb * 6
-    cass_baza_max = smb * 60
-    if venit_net_ron >= cass_baza_min:
-        cass_baza = min(venit_net_ron, cass_baza_max)
-        cass = cass_baza * (tax_info["cass_pct"] / 100)
-    else:
+    impozit = venit * (p["impozit_pct"] / 100)
+
+    if venit < prag_6:
         cass = 0.0
+        cass_status = f"Sub prag (venit < {prag_6:,.0f} RON = 6 salarii minime)"
+    elif venit <= prag_60:
+        cass = venit * (p["cass_pct"] / 100)
+        cass_status = f"10% pe venitul net ({venit:,.0f} RON)"
+    else:
+        cass = prag_60 * (p["cass_pct"] / 100)
+        cass_status = f"Plafonat la 60 salarii minime ({prag_60:,.0f} RON)"
 
-    total = impozit + cas + cass
     return {
-        "impozit": impozit,
-        "cas": cas,
-        "cass": cass,
-        "total": total,
-        "cas_baza_min": cas_baza_min,
-        "cass_baza_min": cass_baza_min,
+        "impozit": impozit, "cass": cass, "cas": 0.0,
+        "total": impozit + cass, "cass_status": cass_status,
+        "smb": smb, "prag_6": prag_6, "prag_60": prag_60,
+        "impozit_pct": p["impozit_pct"], "cass_pct": p["cass_pct"], "an": an,
     }
 
 
@@ -1362,124 +1298,27 @@ if "payouts_data" not in st.session_state:
     st.session_state.payouts_data = {}
 if "conturi_data" not in st.session_state:
     st.session_state.conturi_data = {}
-if "tax_info" not in st.session_state:
-    st.session_state.tax_info = None
-if "bnr_rates_cache" not in st.session_state:
-    st.session_state.bnr_rates_cache = {}   # {date_str: {eur, usd, data, ok}}
-if "bnr_selected_date" not in st.session_state:
-    st.session_state.bnr_selected_date = datetime.now().date()
 
 st.markdown("---")
 st.markdown("<h2 style='text-align:center;'>💼 Tracker Financiar & Calculator Taxe ANAF</h2>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center; color:#8b949e; margin-bottom:16px;'>Venituri din alte surse (prop trading) — impozit 10% + CASS pe praguri</p>", unsafe_allow_html=True)
 
-# ── CURS VALUTAR BNR ──
-with st.expander("💱 Curs Valutar BNR — Selectează Data", expanded=True):
-    bnr_c1, bnr_c2, bnr_c3 = st.columns([2, 1, 1])
-    with bnr_c1:
-        st.markdown("**Alege data pentru cursul BNR:**")
-        bnr_date_mode = st.radio(
-            "Mod selectare:",
-            ["📅 Astăzi", "📆 Dată specifică (ex: 31.12.2025)", "✏️ Manual"],
-            horizontal=True,
-            label_visibility="collapsed"
-        )
-
-    if bnr_date_mode == "📅 Astăzi":
-        bnr_date = datetime.now().date()
-        st.session_state.bnr_selected_date = bnr_date
-    elif bnr_date_mode == "📆 Dată specifică (ex: 31.12.2025)":
-        bnr_date = st.date_input(
-            "Selectează data:",
-            value=st.session_state.bnr_selected_date,
-            min_value=_date(2005, 1, 1),
-            max_value=datetime.now().date(),
-            format="DD.MM.YYYY",
-            key="bnr_date_picker"
-        )
-        st.session_state.bnr_selected_date = bnr_date
-    else:
-        bnr_date = None  # manual — se setează mai jos
-
-    # Buton fetch
-    bnr_fetch_col1, bnr_fetch_col2 = st.columns([1, 3])
-    with bnr_fetch_col1:
-        fetch_bnr_btn = st.button("🔄 Preia curs BNR", use_container_width=True, type="primary",
-                                   disabled=(bnr_date_mode == "✏️ Manual"))
-
-    bnr_date_key = str(bnr_date) if bnr_date else None
-
-    # Auto-fetch la prima accesare sau la apăsarea butonului
-    if bnr_date_mode != "✏️ Manual":
-        if fetch_bnr_btn or (bnr_date_key and bnr_date_key not in st.session_state.bnr_rates_cache):
-            with st.spinner(f"Se preia cursul BNR pentru {bnr_date.strftime('%d.%m.%Y')}..."):
-                result = fetch_bnr_rates(bnr_date)
-                st.session_state.bnr_rates_cache[bnr_date_key] = result
-
-    # Afișare rezultat / input manual
-    if bnr_date_mode == "✏️ Manual":
-        man_c1, man_c2 = st.columns(2)
-        with man_c1:
-            usd_ron_manual = st.number_input("Curs USD → RON (manual):", min_value=1.0, max_value=20.0,
-                                              value=4.60, step=0.0001, format="%.4f", key="usd_ron_manual")
-        with man_c2:
-            eur_ron_manual = st.number_input("Curs EUR → RON (manual):", min_value=1.0, max_value=20.0,
-                                              value=4.97, step=0.0001, format="%.4f", key="eur_ron_manual")
-        usd_ron = usd_ron_manual
-        eur_ron = eur_ron_manual
-        bnr_status_msg = "⚙️ Curs introdus manual"
-        bnr_ok = True
-    elif bnr_date_key and bnr_date_key in st.session_state.bnr_rates_cache:
-        cached = st.session_state.bnr_rates_cache[bnr_date_key]
-        if cached["ok"]:
-            usd_ron = cached["usd"]
-            eur_ron = cached["eur"]
-            actual_d = cached["data"]
-            bnr_status_msg = f"✅ Curs BNR pentru **{actual_d}** preluat de pe cursbnr.ro"
-            bnr_ok = True
-        else:
-            usd_ron = 4.60
-            eur_ron = 4.97
-            bnr_status_msg = f"⚠️ Nu s-a putut prelua cursul pentru {bnr_date_key} (zi nebancară sau eroare). Se folosesc valori implicite."
-            bnr_ok = False
-    else:
-        usd_ron = 4.60
-        eur_ron = 4.97
-        bnr_status_msg = "⏳ Apasă 'Preia curs BNR' pentru a încărca cursul oficial."
-        bnr_ok = False
-
-    # Afișare carduri curs
-    rate_c1, rate_c2, rate_c3 = st.columns(3)
-    rate_color = "#00cf8d" if bnr_ok else "#ffa500"
-    with rate_c1:
-        st.markdown(f"""
-            <div style="background:#161b22; border:1px solid #30363d; border-left:4px solid {rate_color};
-                        border-radius:8px; padding:12px; text-align:center;">
-                <div style="font-size:12px; color:#8b949e; text-transform:uppercase;">USD → RON</div>
-                <div style="font-size:22px; font-weight:bold; color:{rate_color};">{usd_ron:.4f}</div>
-            </div>""", unsafe_allow_html=True)
-    with rate_c2:
-        st.markdown(f"""
-            <div style="background:#161b22; border:1px solid #30363d; border-left:4px solid {rate_color};
-                        border-radius:8px; padding:12px; text-align:center;">
-                <div style="font-size:12px; color:#8b949e; text-transform:uppercase;">EUR → RON</div>
-                <div style="font-size:22px; font-weight:bold; color:{rate_color};">{eur_ron:.4f}</div>
-            </div>""", unsafe_allow_html=True)
-    with rate_c3:
-        st.markdown(f"""
-            <div style="background:#161b22; border:1px solid #30363d; border-left:4px solid {rate_color};
-                        border-radius:8px; padding:12px; text-align:center;">
-                <div style="font-size:12px; color:#8b949e; text-transform:uppercase;">Sursă</div>
-                <div style="font-size:13px; color:{rate_color}; margin-top:4px;">BNR / cursbnr.ro</div>
-            </div>""", unsafe_allow_html=True)
-
-    st.markdown(f"<small style='color:#8b949e;'>{bnr_status_msg}</small>", unsafe_allow_html=True)
-    st.markdown("<small style='color:#555;'>ℹ️ BNR publică cursul în ziua precedentă pentru ziua următoare. Zilele de weekend/sărbătoare folosesc cursul zilei bancare anterioare. Pentru declarația 212 (an fiscal 2025) folosește data de 31.12.2025.</small>", unsafe_allow_html=True)
+# ── CURS VALUTAR ──
+with st.expander("💱 Curs Valutar USD → RON", expanded=False):
+    st.markdown("<small style='color:#8b949e;'>Pentru Declarația Unică pe anul fiscal 2025 se folosește cursul BNR din 31.12.2025.</small>", unsafe_allow_html=True)
+    _cc1, _cc2 = st.columns(2)
+    with _cc1:
+        usd_ron = st.number_input("Curs USD → RON:", min_value=1.0, max_value=20.0,
+                                value=4.60, step=0.0001, format="%.4f", key="usd_ron_tracker")
+    with _cc2:
+        eur_ron = st.number_input("Curs EUR → RON (opțional):", min_value=1.0, max_value=20.0,
+                                value=4.97, step=0.0001, format="%.4f", key="eur_ron_tracker")
 
 # ── SELECTARE AN ──
 current_year = datetime.now().year
 available_years = list(range(2022, current_year + 2))
-selected_tracker_year = st.selectbox("📅 Selectează Anul:", available_years,
-                                      index=available_years.index(current_year))
+selected_tracker_year = st.selectbox("📅 An fiscal:", available_years,
+                                    index=available_years.index(current_year))
 year_key = str(selected_tracker_year)
 
 if year_key not in st.session_state.payouts_data:
@@ -1487,566 +1326,227 @@ if year_key not in st.session_state.payouts_data:
 if year_key not in st.session_state.conturi_data:
     st.session_state.conturi_data[year_key] = []
 
-tracker_col1, tracker_col2 = st.columns(2)
+# ── MOD RAPID vs DETALIAT ──
+tracker_mod = st.radio(
+    "Cum introduci datele?",
+    ["⚡ Rapid (introduc totalurile direct)", "📋 Detaliat (adaug fiecare payout/cont)"],
+    horizontal=True,
+    key=f"mod_input_{year_key}"
+)
+st.markdown("")
 
-# ──────────────────────────────────────────────────────────────
-# COLOANA 1 — PAYOUT-URI
-# ──────────────────────────────────────────────────────────────
-with tracker_col1:
-    st.markdown("### 💰 Payout-uri Încasate")
+if tracker_mod.startswith("⚡"):
+    # ── MOD RAPID ──
+    _rc1, _rc2 = st.columns(2)
+    with _rc1:
+        st.markdown("<h4 style='color:#00cf8d;'>💰 Total Payout-uri Încasate</h4>", unsafe_allow_html=True)
+        total_payouts_usd = st.number_input(
+            "Suma totală payout-uri ($):", min_value=0.0, step=100.0, format="%.2f",
+            key=f"quick_pay_{year_key}",
+            help="Introdu suma TOTALĂ a tuturor payout-urilor din acest an, dintr-o dată."
+        )
+    with _rc2:
+        st.markdown("<h4 style='color:#ff6b6b;'>📋 Total Conturi Cumpărate</h4>", unsafe_allow_html=True)
+        total_conturi_usd = st.number_input(
+            "Cost total conturi ($):", min_value=0.0, step=50.0, format="%.2f",
+            key=f"quick_cont_{year_key}",
+            help="Introdu costul TOTAL al tuturor conturilor cumpărate în acest an."
+        )
+    nr_conturi = None
+else:
+    # ── MOD DETALIAT ──
+    _dcol1, _dcol2 = st.columns(2)
+    with _dcol1:
+        st.markdown("### 💰 Payout-uri Încasate")
+        with st.form(key=f"form_payout_{year_key}", clear_on_submit=True):
+            _pf1, _pf2 = st.columns(2)
+            with _pf1:
+                _p_data = st.date_input("Data:", datetime.now().date(), key=f"pd_{year_key}")
+            with _pf2:
+                _p_suma = st.number_input("Suma ($):", min_value=0.0, step=10.0, format="%.2f", key=f"ps_{year_key}")
+            _p_firma = st.text_input("Firma (FTMO, MFF, Topstep...):", key=f"pf_{year_key}")
+            if st.form_submit_button("➕ Adaugă Payout", use_container_width=True) and _p_suma > 0:
+                st.session_state.payouts_data[year_key].append(
+                    {"data": str(_p_data), "suma_usd": _p_suma, "firma": _p_firma or "—"})
+                st.success(f"Payout adăugat: ${_p_suma:,.2f}")
 
-    with st.form(key=f"form_payout_{year_key}", clear_on_submit=True):
-        pf_col1, pf_col2 = st.columns(2)
-        with pf_col1:
-            payout_data_input = st.date_input("Data payout:", datetime.now().date(), key=f"pd_{year_key}")
-        with pf_col2:
-            payout_suma = st.number_input("Suma ($):", min_value=0.0, step=10.0, format="%.2f", key=f"ps_{year_key}")
-        payout_firma = st.text_input("Firma (ex: FTMO, MFF, Topstep):", key=f"pf_{year_key}")
-        add_payout = st.form_submit_button("➕ Adaugă Payout", use_container_width=True)
-        if add_payout and payout_suma > 0:
-            st.session_state.payouts_data[year_key].append({
-                "data": str(payout_data_input),
-                "suma_usd": payout_suma,
-                "firma": payout_firma or "—"
-            })
-            st.success(f"Payout adăugat: ${payout_suma:,.2f}")
+        _payouts_list = st.session_state.payouts_data[year_key]
+        if _payouts_list:
+            _dfp = pd.DataFrame(_payouts_list)
+            _dfp.columns = ["Data", "Suma USD", "Firma"]
+            _dfp["Suma RON"] = _dfp["Suma USD"].apply(lambda x: f"{x * usd_ron:,.2f}")
+            _dfp["Suma USD"] = _dfp["Suma USD"].apply(lambda x: f"${x:,.2f}")
+            st.dataframe(_dfp, use_container_width=True, hide_index=True)
+            if st.button("🗑️ Șterge ultimul payout", key=f"del_p_{year_key}"):
+                st.session_state.payouts_data[year_key].pop()
+                st.rerun()
 
-    payouts_list = st.session_state.payouts_data[year_key]
-    total_payouts_usd = sum(p["suma_usd"] for p in payouts_list)
-    total_payouts_ron = total_payouts_usd * usd_ron
+    with _dcol2:
+        st.markdown("### 📋 Conturi Cumpărate")
+        with st.form(key=f"form_cont_{year_key}", clear_on_submit=True):
+            _cf1, _cf2 = st.columns(2)
+            with _cf1:
+                _c_data = st.date_input("Data:", datetime.now().date(), key=f"cd_{year_key}")
+            with _cf2:
+                _c_cost = st.number_input("Cost ($):", min_value=0.0, step=10.0, format="%.2f", key=f"cc_{year_key}")
+            _c_firma = st.text_input("Firma:", key=f"cf_{year_key}")
+            if st.form_submit_button("➕ Adaugă Cont", use_container_width=True) and _c_cost > 0:
+                st.session_state.conturi_data[year_key].append(
+                    {"data": str(_c_data), "cost_usd": _c_cost, "firma": _c_firma or "—"})
+                st.success(f"Cont adăugat: ${_c_cost:,.2f}")
 
-    if payouts_list:
-        df_payouts = pd.DataFrame(payouts_list)
-        df_payouts.columns = ["Data", "Suma USD", "Firma"]
-        df_payouts["Suma RON"] = df_payouts["Suma USD"].apply(lambda x: f"{x * usd_ron:,.2f} RON")
-        df_payouts["Suma USD"] = df_payouts["Suma USD"].apply(lambda x: f"${x:,.2f}")
+        _conturi_list = st.session_state.conturi_data[year_key]
+        if _conturi_list:
+            _dfc = pd.DataFrame(_conturi_list)
+            _dfc.columns = ["Data", "Cost USD", "Firma"]
+            _dfc["Cost RON"] = _dfc["Cost USD"].apply(lambda x: f"{x * usd_ron:,.2f}")
+            _dfc["Cost USD"] = _dfc["Cost USD"].apply(lambda x: f"${x:,.2f}")
+            st.dataframe(_dfc, use_container_width=True, hide_index=True)
+            if st.button("🗑️ Șterge ultimul cont", key=f"del_c_{year_key}"):
+                st.session_state.conturi_data[year_key].pop()
+                st.rerun()
 
-        st.dataframe(df_payouts, use_container_width=True, hide_index=True)
+    total_payouts_usd = sum(p["suma_usd"] for p in st.session_state.payouts_data[year_key])
+    total_conturi_usd = sum(c["cost_usd"] for c in st.session_state.conturi_data[year_key])
+    nr_conturi = len(st.session_state.conturi_data[year_key])
 
-        # Buton ștergere ultimul payout
-        if st.button("🗑️ Șterge ultimul payout", key=f"del_p_{year_key}"):
-            st.session_state.payouts_data[year_key].pop()
-            st.rerun()
-
-    st.markdown(f"""
-        <div style="background:#0d2111; border:1px solid #00cf8d; border-radius:10px;
-                    padding:15px; text-align:center; margin-top:10px;">
-            <p style="margin:0; font-size:12px; color:#8b949e; text-transform:uppercase;">
-                Total Payout-uri {selected_tracker_year}
-            </p>
-            <h2 style="color:#00cf8d; margin:5px 0;">${total_payouts_usd:,.2f}</h2>
-            <p style="margin:0; font-size:14px; color:#aaa;">{total_payouts_ron:,.2f} RON</p>
-        </div>""", unsafe_allow_html=True)
-
-# ──────────────────────────────────────────────────────────────
-# COLOANA 2 — CONTURI FUNDED
-# ──────────────────────────────────────────────────────────────
-with tracker_col2:
-    st.markdown("### 📋 Conturi Funded Cumpărate")
-
-    with st.form(key=f"form_cont_{year_key}", clear_on_submit=True):
-        cf_col1, cf_col2 = st.columns(2)
-        with cf_col1:
-            cont_data_input = st.date_input("Data cumpărare:", datetime.now().date(), key=f"cd_{year_key}")
-        with cf_col2:
-            cont_cost = st.number_input("Cost ($):", min_value=0.0, step=10.0, format="%.2f", key=f"cc_{year_key}")
-        cont_firma = st.text_input("Firma (ex: FTMO, MFF):", key=f"cf_{year_key}")
-        add_cont = st.form_submit_button("➕ Adaugă Cont", use_container_width=True)
-        if add_cont and cont_cost > 0:
-            st.session_state.conturi_data[year_key].append({
-                "data": str(cont_data_input),
-                "cost_usd": cont_cost,
-                "firma": cont_firma or "—"
-            })
-            st.success(f"Cont adăugat: ${cont_cost:,.2f}")
-
-    conturi_list = st.session_state.conturi_data[year_key]
-    total_conturi_usd = sum(c["cost_usd"] for c in conturi_list)
-    total_conturi_ron = total_conturi_usd * usd_ron
-    nr_conturi = len(conturi_list)
-
-    if conturi_list:
-        df_conturi = pd.DataFrame(conturi_list)
-        df_conturi.columns = ["Data", "Cost USD", "Firma"]
-        df_conturi["Cost RON"] = df_conturi["Cost USD"].apply(lambda x: f"{x * usd_ron:,.2f} RON")
-        df_conturi["Cost USD"] = df_conturi["Cost USD"].apply(lambda x: f"${x:,.2f}")
-        st.dataframe(df_conturi, use_container_width=True, hide_index=True)
-
-        if st.button("🗑️ Șterge ultimul cont", key=f"del_c_{year_key}"):
-            st.session_state.conturi_data[year_key].pop()
-            st.rerun()
-
-    st.markdown(f"""
-        <div style="background:#210d0d; border:1px solid #cf4444; border-radius:10px;
-                    padding:15px; text-align:center; margin-top:10px;">
-            <p style="margin:0; font-size:12px; color:#8b949e; text-transform:uppercase;">
-                Total Cheltuieli Conturi {selected_tracker_year}
-            </p>
-            <h2 style="color:#ff6b6b; margin:5px 0;">${total_conturi_usd:,.2f}</h2>
-            <p style="margin:0; font-size:14px; color:#aaa;">{total_conturi_ron:,.2f} RON</p>
-            <p style="margin:4px 0 0 0; font-size:13px; color:#8b949e;">{nr_conturi} conturi cumpărate</p>
-        </div>""", unsafe_allow_html=True)
-
-# ── SUMAR PROFIT NET ──
+# ── SUMAR VENIT NET ──
+total_payouts_ron = total_payouts_usd * usd_ron
+total_conturi_ron = total_conturi_usd * usd_ron
 profit_net_usd = total_payouts_usd - total_conturi_usd
 profit_net_ron = profit_net_usd * usd_ron
 
 st.markdown("")
-sum_col1, sum_col2, sum_col3 = st.columns(3)
-with sum_col1:
-    st.markdown(f"""
-        <div class="stat-card" style="text-align:center;">
-            <div class="stat-label">Venit Brut (Payout-uri)</div>
-            <div class="stat-value" style="color:#00cf8d;">${total_payouts_usd:,.2f}</div>
-            <div class="stat-sub">{total_payouts_ron:,.2f} RON</div>
-        </div>""", unsafe_allow_html=True)
-with sum_col2:
-    st.markdown(f"""
-        <div class="stat-card" style="text-align:center;">
-            <div class="stat-label">Cheltuieli Deductibile (Conturi)</div>
-            <div class="stat-value" style="color:#ff6b6b;">${total_conturi_usd:,.2f}</div>
-            <div class="stat-sub">{total_conturi_ron:,.2f} RON</div>
-        </div>""", unsafe_allow_html=True)
-with sum_col3:
-    pnl_color = "#00cf8d" if profit_net_usd >= 0 else "#ff6b6b"
-    st.markdown(f"""
-        <div class="stat-card" style="text-align:center;">
-            <div class="stat-label">Profit Net Impozabil</div>
-            <div class="stat-value" style="color:{pnl_color};">${profit_net_usd:,.2f}</div>
-            <div class="stat-sub">{profit_net_ron:,.2f} RON</div>
-        </div>""", unsafe_allow_html=True)
+_s1, _s2, _s3 = st.columns(3)
+with _s1:
+    st.markdown(f"""<div class="stat-card" style="text-align:center;">
+        <div class="stat-label">Venit Brut (Payout-uri)</div>
+        <div class="stat-value" style="color:#00cf8d;">${total_payouts_usd:,.2f}</div>
+        <div class="stat-sub">{total_payouts_ron:,.2f} RON</div></div>""", unsafe_allow_html=True)
+with _s2:
+    _sub_txt = f"{total_conturi_ron:,.2f} RON" + (f" • {nr_conturi} conturi" if nr_conturi is not None else "")
+    st.markdown(f"""<div class="stat-card" style="text-align:center;">
+        <div class="stat-label">Cheltuieli Deductibile (Conturi)</div>
+        <div class="stat-value" style="color:#ff6b6b;">${total_conturi_usd:,.2f}</div>
+        <div class="stat-sub">{_sub_txt}</div></div>""", unsafe_allow_html=True)
+with _s3:
+    _pc = "#00cf8d" if profit_net_usd >= 0 else "#ff6b6b"
+    st.markdown(f"""<div class="stat-card" style="text-align:center;">
+        <div class="stat-label">Profit Net Impozabil</div>
+        <div class="stat-value" style="color:{_pc};">${profit_net_usd:,.2f}</div>
+        <div class="stat-sub">{profit_net_ron:,.2f} RON</div></div>""", unsafe_allow_html=True)
 
-# ──────────────────────────────────────────────────────────────
-# CALCULATOR TAXE ANAF
-# ──────────────────────────────────────────────────────────────
+# ── CALCULATOR TAXE ──
 st.markdown("")
-st.markdown("### 🏛️ Calculator Taxe ANAF România")
+st.markdown("### 🏛️ Calculator Taxe ANAF — Venituri din Alte Surse")
 
-anaf_col1, anaf_col2 = st.columns([1, 1])
-with anaf_col1:
-    if st.button("🔄 Actualizează informații taxe ANAF", use_container_width=True, type="primary"):
-        with st.spinner("Se preiau datele actualizate ANAF..."):
-            st.session_state.tax_info = fetch_anaf_tax_info()
-        st.success("Date ANAF actualizate!")
-
-if st.session_state.tax_info is None:
-    with st.spinner("Se încarcă informații taxe ANAF..."):
-        st.session_state.tax_info = fetch_anaf_tax_info()
-
-tax_info = st.session_state.tax_info
-
-with st.expander("ℹ️ Informații Taxe ANAF Curente", expanded=False):
-    smb = tax_info["salariul_minim_brut"]
+_p = get_fiscal_params(selected_tracker_year)
+with st.expander("ℹ️ Parametri fiscali folosiți", expanded=False):
     st.markdown(f"""
-    | Parametru | Valoare |
-    |-----------|---------|
-    | **An referință** | {tax_info["an"]} |
-    | **Salariu minim brut** | {smb:,.2f} RON |
-    | **Impozit venit** | {tax_info["impozit_venit_pct"]}% (aplicat la venitul net) |
-    | **CAS** | {tax_info["cas_pct"]}% — dacă venitul net ≥ {smb * 12:,.0f} RON (12 SMB), plafonat la {smb * 24:,.0f} RON |
-    | **CASS** | {tax_info["cass_pct"]}% — dacă venitul net ≥ {smb * 6:,.0f} RON (6 SMB), plafonat la {smb * 60:,.0f} RON |
-    | **Note** | {tax_info.get("note", "—")} |
-    """)
+| Parametru | Valoare ({selected_tracker_year}) |
+|-----------|---------|
+| **Salariu minim brut (reper)** | {_p['smb']:,.2f} RON |
+| **Impozit venit** | {_p['impozit_pct']:.0f}% pe câștigul net |
+| **CASS** | {_p['cass_pct']:.0f}% — doar dacă venit net ≥ 6 salarii minime ({_p['smb']*6:,.0f} RON) |
+| **Plafon CASS maxim** | 60 salarii minime = {_p['smb']*60:,.0f} RON |
+| **CAS** | ❌ NU se datorează pentru venituri din alte surse |
 
-# Input manual sau auto din tracker
-tax_input_col1, tax_input_col2 = st.columns(2)
-with tax_input_col1:
-    use_tracker_data = st.checkbox(
-        f"Folosește datele din tracker ({year_key}) — Profit net ${profit_net_usd:,.2f}",
-        value=True
-    )
-with tax_input_col2:
-    if use_tracker_data:
+<small style='color:#8b949e;'>Reper 2025: salariul minim 4.050 RON (HG 1506/2024). Pentru veniturile 2026 salariul minim crește la 4.325 RON din iulie, dar reperul D212 e valoarea de la 1 ianuarie.</small>
+    """, unsafe_allow_html=True)
+
+_ti1, _ti2 = st.columns(2)
+with _ti1:
+    _use_tracker = st.checkbox(
+        f"Folosește profitul net din tracker (${profit_net_usd:,.2f} = {profit_net_ron:,.2f} RON)",
+        value=True, key=f"use_tracker_{year_key}")
+with _ti2:
+    if _use_tracker:
         venit_net_ron_input = profit_net_ron
-        st.markdown(f"""
-            <div style="padding:8px; background:#161b22; border-radius:8px; border:1px solid #30363d;">
-                <span style="color:#8b949e; font-size:13px;">Venit net impozabil:</span>
-                <span style="color:#00cf8d; font-weight:bold; font-size:16px; margin-left:8px;">{venit_net_ron_input:,.2f} RON</span>
+        st.markdown(f"""<div style="padding:8px; background:#161b22; border-radius:8px; border:1px solid #30363d;">
+            <span style="color:#8b949e; font-size:13px;">Venit net impozabil:</span>
+            <span style="color:#00cf8d; font-weight:bold; font-size:16px; margin-left:8px;">{venit_net_ron_input:,.2f} RON</span>
             </div>""", unsafe_allow_html=True)
     else:
-        venit_net_ron_input = st.number_input(
-            "Introdu manual venitul net impozabil (RON):",
-            min_value=0.0, step=100.0, format="%.2f", value=max(0.0, profit_net_ron)
-        )
+        venit_net_ron_input = st.number_input("Venit net impozabil manual (RON):",
+                                            min_value=0.0, step=100.0, format="%.2f",
+                                            value=max(0.0, profit_net_ron), key=f"venit_manual_{year_key}")
 
 if venit_net_ron_input > 0:
-    taxes = calculate_taxes_ro(venit_net_ron_input, tax_info)
-    smb = tax_info["salariul_minim_brut"]
+    _t = calculeaza_taxe_alte_surse(venit_net_ron_input, selected_tracker_year)
 
-    t1, t2, t3, t4 = st.columns(4)
-    with t1:
-        st.markdown(f"""
-            <div class="stat-card" style="text-align:center;">
-                <div class="stat-label">Impozit Venit 10%</div>
-                <div class="stat-value" style="color:#ffa500;">{taxes["impozit"]:,.2f} RON</div>
-                <div class="stat-sub">${taxes["impozit"] / usd_ron:,.2f}</div>
-            </div>""", unsafe_allow_html=True)
-    with t2:
-        cas_status = "✅ Datorat" if taxes["cas"] > 0 else f"⏭️ Sub prag ({smb*12:,.0f} RON)"
-        st.markdown(f"""
-            <div class="stat-card" style="text-align:center;">
-                <div class="stat-label">CAS 25%</div>
-                <div class="stat-value" style="color:#ff6b6b;">{taxes["cas"]:,.2f} RON</div>
-                <div class="stat-sub">{cas_status}</div>
-            </div>""", unsafe_allow_html=True)
-    with t3:
-        cass_status = "✅ Datorat" if taxes["cass"] > 0 else f"⏭️ Sub prag ({smb*6:,.0f} RON)"
-        st.markdown(f"""
-            <div class="stat-card" style="text-align:center;">
-                <div class="stat-label">CASS 10%</div>
-                <div class="stat-value" style="color:#ff6b6b;">{taxes["cass"]:,.2f} RON</div>
-                <div class="stat-sub">{cass_status}</div>
-            </div>""", unsafe_allow_html=True)
-    with t4:
-        effective_rate = (taxes["total"] / venit_net_ron_input * 100) if venit_net_ron_input > 0 else 0
-        st.markdown(f"""
-            <div class="stat-card" style="text-align:center;">
-                <div class="stat-label">TOTAL DE PLATĂ ANAF</div>
-                <div class="stat-value" style="color:#ff4444;">{taxes["total"]:,.2f} RON</div>
-                <div class="stat-sub">Rată efectivă: {effective_rate:.1f}%</div>
-            </div>""", unsafe_allow_html=True)
+    st.markdown("")
+    _tc1, _tc2, _tc3 = st.columns(3)
+    with _tc1:
+        st.markdown(f"""<div class="stat-card" style="text-align:center;">
+            <div class="stat-label">Impozit Venit {_t['impozit_pct']:.0f}%</div>
+            <div class="stat-value" style="color:#ffa500;">{_t['impozit']:,.2f} RON</div>
+            <div class="stat-sub">${_t['impozit']/usd_ron:,.2f}</div></div>""", unsafe_allow_html=True)
+    with _tc2:
+        _cass_c = "#ff6b6b" if _t['cass'] > 0 else "#888"
+        st.markdown(f"""<div class="stat-card" style="text-align:center;">
+            <div class="stat-label">CASS {_t['cass_pct']:.0f}%</div>
+            <div class="stat-value" style="color:{_cass_c};">{_t['cass']:,.2f} RON</div>
+            <div class="stat-sub">${_t['cass']/usd_ron:,.2f}</div></div>""", unsafe_allow_html=True)
+    with _tc3:
+        _eff = (_t['total'] / venit_net_ron_input * 100) if venit_net_ron_input > 0 else 0
+        st.markdown(f"""<div class="stat-card" style="text-align:center;">
+            <div class="stat-label">TOTAL DE PLATĂ ANAF</div>
+            <div class="stat-value" style="color:#ff4444;">{_t['total']:,.2f} RON</div>
+            <div class="stat-sub">Rată efectivă: {_eff:.1f}% • ${_t['total']/usd_ron:,.2f}</div></div>""",
+            unsafe_allow_html=True)
 
-    ramas_dupa_taxe_ron = venit_net_ron_input - taxes["total"]
-    ramas_dupa_taxe_usd = ramas_dupa_taxe_ron / usd_ron
+    _ramas_ron = venit_net_ron_input - _t['total']
+    _ramas_usd = _ramas_ron / usd_ron
 
     st.markdown(f"""
-        <div style="background:#0d1a2e; border:1px solid #4a9eff; border-left:5px solid #4a9eff;
-                    border-radius:10px; padding:18px; margin-top:15px;">
-            <h4 style="color:#4a9eff; margin-top:0;">📊 Sumar Fiscal {selected_tracker_year}</h4>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:14px; line-height:2;">
-                <div>💵 <b>Venit brut (payout-uri):</b></div>
-                <div style="color:#00cf8d;">${total_payouts_usd:,.2f} / {total_payouts_ron:,.2f} RON</div>
-                <div>🏦 <b>Cheltuieli deductibile (conturi):</b></div>
-                <div style="color:#ff6b6b;">- ${total_conturi_usd:,.2f} / {total_conturi_ron:,.2f} RON</div>
-                <div>📊 <b>Venit net impozabil:</b></div>
-                <div style="color:#ffa500;">{venit_net_ron_input:,.2f} RON</div>
-                <div>🏛️ <b>Impozit 10%:</b></div>
-                <div style="color:#ff9944;">{taxes["impozit"]:,.2f} RON</div>
-                <div>👴 <b>CAS 25%:</b></div>
-                <div style="color:#ff6b6b;">{taxes["cas"]:,.2f} RON {"(datorat)" if taxes["cas"] > 0 else "(sub prag)"}</div>
-                <div>🏥 <b>CASS 10%:</b></div>
-                <div style="color:#ff6b6b;">{taxes["cass"]:,.2f} RON {"(datorat)" if taxes["cass"] > 0 else "(sub prag)"}</div>
-                <div><b>🔴 TOTAL ANAF DE PLATĂ:</b></div>
-                <div style="color:#ff4444; font-weight:bold; font-size:16px;">{taxes["total"]:,.2f} RON (≈ ${taxes["total"]/usd_ron:,.2f})</div>
-                <div>✅ <b>Rămâne după taxe:</b></div>
-                <div style="color:#00cf8d; font-weight:bold;">{ramas_dupa_taxe_ron:,.2f} RON (≈ ${ramas_dupa_taxe_usd:,.2f})</div>
-            </div>
-            <p style="margin:10px 0 0 0; font-size:12px; color:#8b949e;">
-                ⚠️ Calculul este orientativ. Consultă un contabil sau fiscalist pentru situația ta exactă.
-                Datele taxelor sunt preluate automat și verificate la fiecare accesare.
-            </p>
-        </div>""", unsafe_allow_html=True)
-else:
-    st.info("Adaugă payout-uri și conturi funded pentru a vedea calculul taxelor, sau introdu manual venitul net.")
-
-
-st.markdown("---")
-
-# ══════════════════════════════════════════════════════════════
-# SCHIȚĂ HEDGE — FUNDED vs CHALLENGE
-# ══════════════════════════════════════════════════════════════
-st.markdown("<h2 style='text-align:center;'>⚖️ Schiță Hedge — Funded vs Challenge</h2>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center; color:#8b949e; margin-bottom:20px;'>Analizează dacă merită schema PH2 + Funded înainte să cumperi conturile</p>", unsafe_allow_html=True)
-
-# ── INPUT CONTURI: titlurile pe același rând ──
-hi1, hi2 = st.columns(2)
-with hi1:
-    st.markdown("<h4 style='color:#00cf8d; margin-bottom:12px;'>✅ Contul Funded</h4>", unsafe_allow_html=True)
-with hi2:
-    cont_tip = st.selectbox("Tip cont #2:", ["Phase 1 (PH1)", "Phase 2 (PH2)", "Funded"], key="cont_tip")
-
-tip_color = "#ffa500" if "PH1" in cont_tip else ("#4a9eff" if "PH2" in cont_tip else "#cf4aff")
-
-hi1b, hi2b = st.columns(2)
-with hi1b:
-    f_size = st.number_input("Mărime cont Funded ($):", min_value=1000, value=25000, step=1000, key="f_size")
-    f_cost = st.number_input("Cost achiziție Funded ($):", min_value=0, value=250, step=10, key="f_cost")
-    f_profit_pct = st.number_input(
-        "Profit split Funded (%):", min_value=50, max_value=100, value=80, step=5, key="f_split",
-        help="Ce % din profit îl primești tu (ex: 80%)"
-    )
-
-with hi2b:
-    st.markdown(f"<h4 style='color:{tip_color}; margin-bottom:12px;'>🎯 Contul {cont_tip}</h4>", unsafe_allow_html=True)
-    c_size = st.number_input(f"Mărime cont {cont_tip} ($):", min_value=1000, value=50000, step=1000, key="c_size")
-    c_cost = st.number_input(f"Cost achiziție {cont_tip} ($):", min_value=0, value=300, step=10, key="c_cost")
-    if "Funded" in cont_tip:
-        c_profit_pct = st.number_input(
-            "Profit split cont #2 (%):", min_value=50, max_value=100, value=80, step=5, key="c_split"
-        )
-    else:
-        c_profit_pct = 80
-
-total_cost = f_cost + c_cost
-
-# ── LIMITE ──
-st.markdown("")
-lim1, lim2 = st.columns(2)
-with lim1:
-    st.markdown("<p style='color:#8b949e; font-size:13px; margin-bottom:4px;'>Limite Cont Funded</p>", unsafe_allow_html=True)
-    f_max_loss_pct = st.number_input("Pierdere maximă Funded (%):", min_value=1.0, max_value=20.0, value=10.0, step=0.5, key="f_maxloss")
-    f_profit_target_pct = st.number_input("Target profit Funded (%):", min_value=1.0, max_value=30.0, value=10.0, step=0.5, key="f_target")
-
-with lim2:
-    st.markdown(f"<p style='color:#8b949e; font-size:13px; margin-bottom:4px;'>Limite {cont_tip}</p>", unsafe_allow_html=True)
-    if "PH1" in cont_tip:
-        c_max_loss_pct = st.number_input("Pierdere maximă PH1 (%):", min_value=1.0, max_value=20.0, value=10.0, step=0.5, key="c_maxloss")
-        c_profit_target_pct = st.number_input("Target profit PH1 (%):", min_value=1.0, max_value=30.0, value=8.0, step=0.5, key="c_target")
-        next_phase = "Phase 2"
-    elif "PH2" in cont_tip:
-        c_max_loss_pct = st.number_input("Pierdere maximă PH2 (%):", min_value=1.0, max_value=20.0, value=10.0, step=0.5, key="c_maxloss")
-        c_profit_target_pct = st.number_input("Target profit PH2 (%):", min_value=1.0, max_value=30.0, value=5.0, step=0.5, key="c_target")
-        next_phase = "Funded"
-    else:
-        c_max_loss_pct = st.number_input("Pierdere maximă #2 (%):", min_value=1.0, max_value=20.0, value=10.0, step=0.5, key="c_maxloss")
-        c_profit_target_pct = st.number_input("Target profit #2 (%):", min_value=1.0, max_value=30.0, value=10.0, step=0.5, key="c_target")
-        next_phase = "Payout"
-
-st.markdown("---")
-
-# ══════════════════════════════════════════════════════════════
-# CALCULE PRINCIPALE
-# ══════════════════════════════════════════════════════════════
-
-f_max_loss_usd = f_size * f_max_loss_pct / 100
-c_max_loss_usd = c_size * c_max_loss_pct / 100
-c_target_usd   = c_size * c_profit_target_pct / 100
-
-# ── DISPLAY: STATUS BARĂ PROGRES ──
-def progress_bar(label, current_pct, max_pct, target_pct, accent_color, size_usd):
-    consumed      = min(abs(min(current_pct, 0.0)), max_pct)   # doar pierderea contează
-    ramas_breach  = max_pct - consumed
-    # target rămas: dacă ești pe minus, trebuie să recuperezi + să faci target
-    ramas_target  = target_pct + abs(min(current_pct, 0.0)) if current_pct < 0 else max(0.0, target_pct - current_pct)
-
-    consumed_usd      = size_usd * consumed / 100
-    breach_ramas_usd  = size_usd * ramas_breach / 100
-    target_ramas_usd  = size_usd * ramas_target / 100
-
-    bar_fill  = int((consumed / max_pct) * 100)
-    bar_color = accent_color if bar_fill < 70 else ("#ffa500" if bar_fill < 90 else "#ff4444")
-
-    st.markdown(f"""
-    <div style="background:#161b22; border:1px solid #30363d; border-radius:10px; padding:16px; margin-bottom:4px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-            <span style="font-weight:bold; color:white; font-size:15px;">{label}</span>
-            <span style="font-size:13px; color:#8b949e; font-weight:bold;">{current_pct:+.2f}%</span>
+    <div style="background:#0d1a2e; border:1px solid #4a9eff; border-left:5px solid #4a9eff;
+                border-radius:10px; padding:18px; margin-top:15px;">
+        <h4 style="color:#4a9eff; margin-top:0;">📊 Sumar Fiscal {selected_tracker_year} — Venituri din Alte Surse</h4>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:14px; line-height:1.9;">
+            <div>💵 <b>Venit brut (payout-uri):</b></div>
+            <div style="color:#00cf8d;">${total_payouts_usd:,.2f} / {total_payouts_ron:,.2f} RON</div>
+            <div>🏦 <b>Cheltuieli deductibile (conturi):</b></div>
+            <div style="color:#ff6b6b;">− ${total_conturi_usd:,.2f} / {total_conturi_ron:,.2f} RON</div>
+            <div>📊 <b>Venit net impozabil:</b></div>
+            <div style="color:#ffa500;">{venit_net_ron_input:,.2f} RON</div>
+            <div>🏛️ <b>Impozit {_t['impozit_pct']:.0f}%:</b></div>
+            <div style="color:#ff9944;">{_t['impozit']:,.2f} RON</div>
+            <div>🏥 <b>CASS {_t['cass_pct']:.0f}%:</b></div>
+            <div style="color:#ff6b6b;">{_t['cass']:,.2f} RON <span style="color:#8b949e; font-size:12px;">({_t['cass_status']})</span></div>
+            <div>👴 <b>CAS:</b></div>
+            <div style="color:#888;">0 RON (nu se datorează pentru alte surse)</div>
+            <div><b>🔴 TOTAL ANAF DE PLATĂ:</b></div>
+            <div style="color:#ff4444; font-weight:bold; font-size:16px;">{_t['total']:,.2f} RON (≈ ${_t['total']/usd_ron:,.2f})</div>
+            <div>✅ <b>Rămâne după taxe:</b></div>
+            <div style="color:#00cf8d; font-weight:bold;">{_ramas_ron:,.2f} RON (≈ ${_ramas_usd:,.2f})</div>
         </div>
-        <div style="background:#0e1117; border-radius:6px; height:14px; position:relative; margin-bottom:12px; overflow:hidden;">
-            <div style="background:{bar_color}; width:{bar_fill}%; height:100%; border-radius:6px; opacity:0.9;"></div>
-        </div>
-        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; font-size:13px; text-align:center;">
-            <div style="background:#0e1117; padding:8px; border-radius:6px;">
-                <div style="color:#8b949e; font-size:10px; text-transform:uppercase; margin-bottom:4px;">Pierdut</div>
-                <div style="color:#f0c040; font-weight:bold;">${consumed_usd:,.0f}</div>
-                <div style="color:#555; font-size:11px;">{consumed:.2f}%</div>
-            </div>
-            <div style="background:#0e1117; padding:8px; border-radius:6px;">
-                <div style="color:#8b949e; font-size:10px; text-transform:uppercase; margin-bottom:4px;">Până la Breach</div>
-                <div style="color:#ff5555; font-weight:bold;">${breach_ramas_usd:,.0f}</div>
-                <div style="color:#555; font-size:11px;">{ramas_breach:.2f}%</div>
-            </div>
-            <div style="background:#0e1117; padding:8px; border-radius:6px;">
-                <div style="color:#8b949e; font-size:10px; text-transform:uppercase; margin-bottom:4px;">Până la Target</div>
-                <div style="color:#00cf8d; font-weight:bold;">${target_ramas_usd:,.0f}</div>
-                <div style="color:#555; font-size:11px;">{ramas_target:.2f}%</div>
-            </div>
-        </div>
+        <p style="margin:12px 0 0 0; font-size:12px; color:#8b949e;">
+            ⚠️ Calcul ORIENTATIV pentru venituri declarate ca „alte surse" prin Declarația Unică (D212).
+            Încadrarea fiscală a payout-urilor de prop trading nu e reglementată explicit — confirmă cu un contabil.
+            Termen depunere D212 pentru anul {selected_tracker_year}: 25 mai {selected_tracker_year+1}.
+        </p>
     </div>""", unsafe_allow_html=True)
 
-st.markdown("### 📊 Status Curent")
-bp1, bp2 = st.columns(2)
-with bp1:
-    f_cur = st.number_input(
-        "Procentaj curent Funded (+ profit / − pierdere):",
-        min_value=float(-f_max_loss_pct), max_value=float(f_profit_target_pct * 3),
-        value=0.0, step=0.1, format="%.2f", key="f_cur_pct"
-    )
-with bp2:
-    c_cur = st.number_input(
-        f"Procentaj curent {cont_tip} (+ profit / − pierdere):",
-        min_value=float(-c_max_loss_pct), max_value=float(c_profit_target_pct * 3),
-        value=0.0, step=0.1, format="%.2f", key="c_cur_pct"
-    )
+    with st.expander("📈 Simulare: cum cresc taxele odată cu venitul", expanded=False):
+        st.markdown("<small style='color:#8b949e;'>Vezi la ce venituri intri în CASS și cum evoluează rata efectivă de taxare.</small>", unsafe_allow_html=True)
+        _praguri_test = [_p['smb']*3, _p['smb']*6, _p['smb']*10, _p['smb']*12,
+                        _p['smb']*24, _p['smb']*40, _p['smb']*60, _p['smb']*80]
+        _rows = []
+        for _v in _praguri_test:
+            _tt = calculeaza_taxe_alte_surse(_v, selected_tracker_year)
+            _eff2 = _tt['total'] / _v * 100 if _v > 0 else 0
+            _rows.append({
+                "Venit net (RON)": f"{_v:,.0f}",
+                "Impozit": f"{_tt['impozit']:,.0f}",
+                "CASS": f"{_tt['cass']:,.0f}",
+                "Total taxe": f"{_tt['total']:,.0f}",
+                "Rată efectivă": f"{_eff2:.1f}%",
+                "Rămâne net": f"{_v - _tt['total']:,.0f}",
+            })
+        st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+else:
+    st.info("Adaugă payout-uri și conturi (sau introdu manual venitul net) pentru a vedea calculul taxelor.")
 
-pb1, pb2 = st.columns(2)
-with pb1:
-    progress_bar(f"✅ Funded  •  ${f_size:,.0f}", f_cur, f_max_loss_pct, f_profit_target_pct, "#00cf8d", f_size)
-with pb2:
-    progress_bar(f"🎯 {cont_tip}  •  ${c_size:,.0f}", c_cur, c_max_loss_pct, c_profit_target_pct, tip_color, c_size)
-
-st.markdown("---")
-
-# ══════════════════════════════════════════════════════════════
-# SCENARII HEDGE — logică corelată
-# ══════════════════════════════════════════════════════════════
-st.markdown("### 🔀 Scenarii Hedge")
-
-# ── Logică procente corelate ──
-# Riscul rămas pe challenge (cât mai poate pierde fără breach), ținând cont de starea curentă
-c_risc_ramas_pct  = c_max_loss_pct - abs(min(c_cur, 0.0))   # ex: 10% - 2% pierdut = 8% risc rămas
-# Funded e curent la f_cur; dacă e negativ, asta "consumă" din profitul posibil
-# Profitul net realizabil pe Funded din hedge = risc rămas challenge − datoria curentă Funded
-profit_net_pct_funded = c_risc_ramas_pct - abs(min(f_cur, 0.0))  # ex: 8% - 2% = 6%
-profit_net_pct_funded = max(profit_net_pct_funded, 0.0)
-
-# Valoarea în $ a 1% din Funded (baza de calcul pentru hedge pe cont mai mic)
-one_pct_funded_usd = f_size / 100   # ex: 25k → $250 per 1%
-
-# Profit brut pe Funded din hedge (aplicat la dimensiunea contului funded)
-profit_brut_funded_usd = profit_net_pct_funded * one_pct_funded_usd  # 6% * $250 = $1,500
-profit_brut_dupa_split = profit_brut_funded_usd * (f_profit_pct / 100)
-
-sc1, sc2 = st.columns(2)
-
-# ── Scenariul 1 — toate valorile pre-calculate ──
-net1            = profit_brut_dupa_split - total_cost
-net1_color      = "#00cf8d" if net1 >= 0 else "#ff6b6b"
-net1_sign       = "+" if net1 >= 0 else ""
-f_cur_color     = "#ff6b6b" if f_cur < 0 else "#00cf8d"
-funded_deficit  = abs(min(f_cur, 0.0))
-
-# Toate string-urile finale, fara diacritice problematice
-s1_title        = f"Scenariul 1 - {cont_tip} face Breach"
-s1_sub          = f"Challenge-ul pierde {c_max_loss_pct:.0f}% - Funded castiga din hedge"
-s1_risc_label   = f"Risc ramas {cont_tip}"
-s1_risc_val     = f"{c_risc_ramas_pct:.2f}%"
-s1_fcur_val     = f"{f_cur:+.2f}%"
-s1_pnf_val      = f"{profit_net_pct_funded:.2f}%"
-s1_formula      = f"({c_risc_ramas_pct:.1f}% - {funded_deficit:.1f}%)"
-s1_1pct_val     = f"${one_pct_funded_usd:,.0f}"
-s1_brut_label   = f"Profit brut ({profit_net_pct_funded:.2f}% x ${one_pct_funded_usd:,.0f})"
-s1_brut_val     = f"+ ${profit_brut_funded_usd:,.2f}"
-s1_split_label  = f"Profit dupa split ({f_profit_pct}%)"
-s1_split_val    = f"+ ${profit_brut_dupa_split:,.2f}"
-s1_cost_val     = f"- ${total_cost:,.2f}"
-s1_net_val      = f"{net1_sign}${net1:,.2f}"
-
-with sc1:
-    st.markdown(f"""<div style="background:#0d1a10;border:1px solid #00cf8d;border-left:4px solid #00cf8d;border-radius:10px;padding:20px;">
-<div style="color:#00cf8d;font-weight:bold;font-size:15px;margin-bottom:4px;">{s1_title}</div>
-<div style="color:#8b949e;font-size:12px;margin-bottom:16px;">{s1_sub}</div>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
-<div style="background:#0e1117;padding:10px;border-radius:8px;text-align:center;">
-<div style="color:#8b949e;font-size:11px;margin-bottom:4px;">{s1_risc_label}</div>
-<div style="color:white;font-size:18px;font-weight:bold;">{s1_risc_val}</div>
-</div>
-<div style="background:#0e1117;padding:10px;border-radius:8px;text-align:center;">
-<div style="color:#8b949e;font-size:11px;margin-bottom:4px;">Funded curent</div>
-<div style="color:{f_cur_color};font-size:18px;font-weight:bold;">{s1_fcur_val}</div>
-</div>
-</div>
-<div style="background:#0e1117;border-radius:8px;padding:12px;margin-bottom:14px;">
-<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px;">
-<span style="color:#8b949e;">Profit net realizabil</span>
-<span style="color:white;font-weight:bold;">{s1_pnf_val} {s1_formula}</span>
-</div>
-<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px;">
-<span style="color:#8b949e;">Valoare 1% din Funded</span>
-<span style="color:white;font-weight:bold;">{s1_1pct_val}</span>
-</div>
-<div style="display:flex;justify-content:space-between;font-size:13px;">
-<span style="color:#8b949e;">{s1_brut_label}</span>
-<span style="color:#00cf8d;font-weight:bold;">{s1_brut_val}</span>
-</div>
-</div>
-<div style="border-top:1px solid #1e2530;padding-top:12px;">
-<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;">
-<span style="color:#8b949e;">{s1_split_label}</span>
-<span style="color:#00cf8d;">{s1_split_val}</span>
-</div>
-<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:10px;">
-<span style="color:#8b949e;">Costuri achizitie conturi</span>
-<span style="color:#ffa500;">{s1_cost_val}</span>
-</div>
-<div style="display:flex;justify-content:space-between;align-items:center;">
-<span style="color:white;font-weight:bold;font-size:14px;">NET FINAL</span>
-<span style="color:{net1_color};font-size:22px;font-weight:bold;">{s1_net_val}</span>
-</div>
-</div>
-</div>""", unsafe_allow_html=True)
-
-# ── Scenariul 2 — toate valorile pre-calculate ──
-new_funded_profit_usd = c_target_usd * (f_profit_pct / 100) if "PH" in cont_tip else 0
-funded_breach_usd     = f_max_loss_usd
-net2                  = new_funded_profit_usd - funded_breach_usd - total_cost
-net2_color            = "#00cf8d" if net2 >= 0 else "#ff6b6b"
-net2_sign             = "+" if net2 >= 0 else ""
-
-s2_title    = f"Scenariul 2 - {cont_tip} Trece - Cont Funded ${c_size:,.0f}"
-s2_sub      = (f"PH2 atinge {c_profit_target_pct:.0f}% target - devii Funded pe ${c_size:,.0f}"
-               if "PH" in cont_tip else "Ambele conturi Funded")
-s2_tgt_lbl  = f"Target {cont_tip} ({c_profit_target_pct:.0f}% din ${c_size:,.0f})"
-s2_tgt_val  = f"Funded ${c_size:,.0f}"
-s2_pay_lbl  = f"Profit primul payout nou funded ({f_profit_pct}% split)"
-s2_pay_val  = f"+ ${new_funded_profit_usd:,.2f}"
-s2_loss_val = f"- ${funded_breach_usd:,.2f}"
-s2_cost_val = f"- ${total_cost:,.2f}"
-s2_net_val  = f"{net2_sign}${net2:,.2f}"
-s2_cap_val  = f"${c_size:,.0f}"
-
-with sc2:
-    st.markdown(f"""<div style="background:#0d1a2e;border:1px solid #4a9eff;border-left:4px solid #4a9eff;border-radius:10px;padding:20px;">
-<div style="color:#4a9eff;font-weight:bold;font-size:15px;margin-bottom:4px;">{s2_title}</div>
-<div style="color:#8b949e;font-size:12px;margin-bottom:16px;">{s2_sub}</div>
-<div style="background:#0e1117;border-radius:8px;padding:12px;margin-bottom:14px;">
-<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px;">
-<span style="color:#8b949e;">{s2_tgt_lbl}</span>
-<span style="color:#4a9eff;font-weight:bold;">{s2_tgt_val}</span>
-</div>
-<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px;">
-<span style="color:#8b949e;">{s2_pay_lbl}</span>
-<span style="color:#00cf8d;font-weight:bold;">{s2_pay_val}</span>
-</div>
-<div style="display:flex;justify-content:space-between;font-size:13px;">
-<span style="color:#8b949e;">Pierdere Funded mic (breach in hedge)</span>
-<span style="color:#ff6b6b;font-weight:bold;">{s2_loss_val}</span>
-</div>
-</div>
-<div style="border-top:1px solid #1e2530;padding-top:12px;">
-<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;">
-<span style="color:#8b949e;">Costuri totale achizitie</span>
-<span style="color:#ffa500;">{s2_cost_val}</span>
-</div>
-<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-<span style="color:white;font-weight:bold;font-size:14px;">NET FINAL</span>
-<span style="color:{net2_color};font-size:22px;font-weight:bold;">{s2_net_val}</span>
-</div>
-<div style="background:#0e1117;border-radius:6px;padding:8px;text-align:center;font-size:12px;color:#4a9eff;font-weight:bold;">+ acces la capital de {s2_cap_val}</div>
-</div>
-</div>""", unsafe_allow_html=True)
-
-# ── SUMAR COSTURI ──
-st.markdown("")
-st.markdown(f"""
-<div style="background:#161b22; border:1px solid #30363d; border-radius:10px; padding:16px 20px;
-            display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-    <div style="text-align:center;">
-        <div style="color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Funded ${f_size:,.0f}</div>
-        <div style="color:white; font-size:18px; font-weight:bold;">${f_cost:,.0f}</div>
-    </div>
-    <div style="color:#444; font-size:20px;">+</div>
-    <div style="text-align:center;">
-        <div style="color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">{cont_tip} ${c_size:,.0f}</div>
-        <div style="color:white; font-size:18px; font-weight:bold;">${c_cost:,.0f}</div>
-    </div>
-    <div style="color:#444; font-size:20px;">=</div>
-    <div style="text-align:center;">
-        <div style="color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Total Investit</div>
-        <div style="color:#ffa500; font-size:24px; font-weight:bold;">${total_cost:,.0f}</div>
-    </div>
-    <div style="color:#444; font-size:20px;">·</div>
-    <div style="text-align:center;">
-        <div style="color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Capital Accesat</div>
-        <div style="color:white; font-size:18px; font-weight:bold;">${f_size+c_size:,.0f}</div>
-    </div>
-    <div style="color:#444; font-size:20px;">·</div>
-    <div style="text-align:center;">
-        <div style="color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Break-even Hedge</div>
-        <div style="color:#00cf8d; font-size:18px; font-weight:bold;">{total_cost/c_size*100:.2f}%</div>
-        <div style="color:#555; font-size:11px;">din ${c_size:,.0f}</div>
-    </div>
-</div>""", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -2100,7 +1600,7 @@ if uploaded_file:
 
         # Detectăm coloana P&L — suportăm toate variantele cunoscute
         _pnl_candidates = ['Net P&L USD', 'Net PnL USD', 'Profit/Loss USD', 'Profit/Loss',
-                           'Net P&L', 'Net PnL', 'PnL USD', 'PnL']
+                        'Net P&L', 'Net PnL', 'PnL USD', 'PnL']
         pnl_col = next((c for c in _pnl_candidates if c in df_combined.columns), None)
         if pnl_col is None:
             df_combined['Net P&L USD'] = 0
@@ -2207,9 +1707,9 @@ if uploaded_file:
                 <div style='padding-top: 4px;'>
                     <button onclick='window.print()'
                         style='width:100%; background:#161b22; color:#e6edf3;
-                               border:1px solid #30363d; border-radius:8px;
-                               padding:10px 0; font-size:14px; cursor:pointer;
-                               margin-top: 0px;'>
+                            border:1px solid #30363d; border-radius:8px;
+                            padding:10px 0; font-size:14px; cursor:pointer;
+                            margin-top: 0px;'>
                         🖨️ Print / Save as PDF din Browser
                     </button>
                 </div>
