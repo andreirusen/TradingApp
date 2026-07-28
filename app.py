@@ -339,6 +339,157 @@ def simulate_copy_trading(df, num_accounts, account_size, payout_days, max_dd_pc
     }
 
 
+def simulate_allocation_strategy(df, method, num_accounts, account_size, payout_days,
+                                 max_dd_pct, risk_per_trade_pct=None):
+    """
+    Simulează diferite METODE de alocare a trade-urilor pe conturi.
+    Toate folosesc aceeași regulă de payout (reset la 0 la final de ciclu dacă e pe plus,
+    deficit reportat dacă e pe minus) și aceeași regulă de blown (drawdown de la peak).
+
+    method:
+      'copy_all'    - toate conturile iau fiecare trade (copy-trading pur)
+      'individual'  - un cont activ pe rând; după ORICE trade se rotește la următorul cont
+      'copy_pairs'  - trade-ul curent pe 2 conturi, următorul pe alte 2 (alternează perechile)
+      'load_balance'- rămâi pe un cont până trece pe plus, apoi sari pe contul cel mai în urmă
+
+    Returnează același format ca simulate_copy_trading.
+    """
+    df_sorted = df.sort_values('Entry Time').copy()
+    empty_ret = {"total_payout": 0.0, "cycles": [], "accounts_survived": num_accounts,
+                 "blown_count": 0, "first_blown_date": None, "num_accounts": num_accounts,
+                 "net_profit_per_account": 0.0, "method": method}
+    if df_sorted.empty or num_accounts < 1:
+        return empty_ret
+
+    max_dd_usd = account_size * (max_dd_pct / 100.0)
+
+    balances = [0.0] * num_accounts
+    peaks = [0.0] * num_accounts
+    active = [True] * num_accounts
+
+    payout_interval = timedelta(days=payout_days)
+    cycle_start = df_sorted['Entry Time'].iloc[0]
+    cycles = []
+    trades_in_cycle = 0
+    first_blown_date = None
+
+    def norm_pnl(pnl_real):
+        if risk_per_trade_pct is not None:
+            unit = account_size * (risk_per_trade_pct / 100.0)
+            return unit if pnl_real > 0 else -unit
+        return pnl_real
+
+    def apply_to_account(i, applied, when):
+        """Aplică P&L pe contul i, actualizează peak, verifică blown."""
+        nonlocal first_blown_date
+        if not active[i]:
+            return
+        balances[i] += applied
+        if balances[i] > peaks[i]:
+            peaks[i] = balances[i]
+        if (balances[i] - peaks[i]) <= -max_dd_usd:
+            active[i] = False
+            if first_blown_date is None:
+                first_blown_date = when
+
+    def close_cycle(end_time):
+        cycle_payout = 0.0
+        for i in range(num_accounts):
+            if not active[i]:
+                continue
+            if balances[i] > 0:
+                cycle_payout += balances[i]
+                balances[i] = 0.0
+                peaks[i] = 0.0
+        worst_dd = min([balances[i] - peaks[i] for i in range(num_accounts)]) if num_accounts else 0.0
+        cycles.append({
+            "Interval": f"{cycle_start.strftime('%d %b')} - {end_time.strftime('%d %b')}",
+            "Payout": cycle_payout,
+            "Max DD Ciclu": worst_dd,
+            "Trades": trades_in_cycle,
+            "Conturi Active": sum(active),
+            "Luna": cycle_start.strftime('%B %Y'),
+        })
+
+    # index-ul de rotație pentru metodele care folosesc un cont/pereche pe rând
+    rot_idx = 0
+    pair_idx = 0
+
+    def next_active_from(idx):
+        """Găsește următorul cont activ pornind de la idx (circular). None dacă niciunul."""
+        for step in range(num_accounts):
+            j = (idx + step) % num_accounts
+            if active[j]:
+                return j
+        return None
+
+    for _, row in df_sorted.iterrows():
+        if row['Entry Time'] >= cycle_start + payout_interval:
+            close_cycle(cycle_start + payout_interval)
+            cycle_start = row['Entry Time']
+            trades_in_cycle = 0
+
+        applied = norm_pnl(row['Net P&L USD'])
+        when = row['Entry Time']
+
+        if method == 'copy_all':
+            for i in range(num_accounts):
+                apply_to_account(i, applied, when)
+
+        elif method == 'individual':
+            # un cont activ pe rând; după orice trade, rotim la următorul cont activ
+            j = next_active_from(rot_idx)
+            if j is not None:
+                apply_to_account(j, applied, when)
+                rot_idx = (j + 1) % num_accounts
+
+        elif method == 'copy_pairs':
+            # perechi de 2 conturi; alternează perechea la fiecare trade
+            if num_accounts >= 2:
+                start = (pair_idx * 2) % num_accounts
+                targets = [start % num_accounts, (start + 1) % num_accounts]
+                for t in set(targets):
+                    apply_to_account(t, applied, when)
+                pair_idx = (pair_idx + 1)
+            else:
+                apply_to_account(0, applied, when)
+
+        elif method == 'load_balance':
+            # rămâi pe contul curent până trece pe plus; apoi sari pe contul cel mai în urmă
+            j = next_active_from(rot_idx)
+            if j is not None:
+                apply_to_account(j, applied, when)
+                # dacă contul curent e acum pe plus, mutăm la contul activ cu balanța cea mai mică
+                if active[j] and balances[j] > 0:
+                    candidates = [(balances[k], k) for k in range(num_accounts) if active[k]]
+                    if candidates:
+                        rot_idx = min(candidates)[1]
+                elif not active[j]:
+                    rot_idx = (j + 1) % num_accounts
+
+        trades_in_cycle += 1
+
+    close_cycle(df_sorted['Entry Time'].iloc[-1])
+
+    total_payout = sum(c["Payout"] for c in cycles)
+    if risk_per_trade_pct is not None:
+        unit = account_size * (risk_per_trade_pct / 100.0)
+        net_profit_per_account = sum(unit if x > 0 else -unit for x in df_sorted['Net P&L USD'])
+    else:
+        net_profit_per_account = float(df_sorted['Net P&L USD'].sum())
+
+    return {
+        "total_payout": total_payout,
+        "cycles": cycles,
+        "accounts_survived": sum(active),
+        "blown_count": num_accounts - sum(active),
+        "first_blown_date": first_blown_date,
+        "num_accounts": num_accounts,
+        "net_profit_per_account": net_profit_per_account,
+        "method": method,
+    }
+
+
 def render_weekly_calendar(df, title_key):
     st.markdown("### 📅 Calendar Profit Săptămânal")
 
@@ -407,7 +558,7 @@ def render_risk_management(df):
     st.markdown("### ⚙️ Configurare Manuală Cont")
     col_a, col_b, col_c, col_d = st.columns(4)
     with col_a:
-        account_size = st.number_input("Mărime Cont ($):", min_value=1000, max_value=500000, value=100000, step=1000)
+        account_size = st.number_input("Mărime Cont ($):", min_value=1000, max_value=500000, value=25000, step=1000)
     with col_b:
         daily_dd_pct = st.slider("Daily Max Drawdown (%):", 1, 15, 5)
     with col_c:
@@ -633,7 +784,7 @@ def render_monte_carlo(df):
     st.markdown("### ⚙️ Configurare")
     mc_c1, mc_c2, mc_c3, mc_c4, mc_c5 = st.columns(5)
     with mc_c1:
-        mc_account = st.number_input("Cont ($):", min_value=1000, max_value=500000, value=100000, step=1000, key="mc_account")
+        mc_account = st.number_input("Cont ($):", min_value=1000, max_value=500000, value=25000, step=1000, key="mc_account")
     with mc_c2:
         mc_daily_dd = st.slider("Daily DD (%):", 1, 15, 5, key="mc_daily_dd")
     with mc_c3:
@@ -920,7 +1071,7 @@ def render_advanced_analysis(df):
 
     bench_col1, bench_col2 = st.columns(2)
     with bench_col1:
-        bench_capital = st.number_input("Capital inițial ($):", min_value=1000, max_value=500000, value=100000, step=1000, key="bench_cap")
+        bench_capital = st.number_input("Capital inițial ($):", min_value=1000, max_value=500000, value=25000, step=1000, key="bench_cap")
     with bench_col2:
         spy_annual_return = st.slider("Return anual estimat SPY (%):", 5, 20, 10)
 
@@ -1121,149 +1272,139 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
         st.info(f"Nu există suficiente date pentru a completa un ciclu de {payout_days} zile.")
 
     # ═══════════════════════════════════════════════════════════
-    # 🔄 COMPARAȚIE STRATEGII COPY-TRADING (1 vs 2 vs 3 vs 4 conturi)
+    # 🔀 COMPARAȚIE METODE DE ALOCARE (4 conturi × 4 strategii)
     # ═══════════════════════════════════════════════════════════
     st.markdown("---")
-    st.markdown("### 🔄 Comparație Strategii Copy-Trading")
+    st.markdown("### 🔀 Comparație Metode de Alocare pe Conturi")
     st.markdown(
-        "<p style='color:#8b949e; font-size:14px;'>Toate conturile iau <b>exact aceleași trade-uri</b> din perioada selectată, în paralel. "
-        "La finalul fiecărui ciclu, dacă un cont e pe plus iei payout = toată balanța și contul se <b>resetează la 0</b>; "
-        "dacă e pe minus, payout 0 și deficitul se reportează până revii pe plus la un payout. "
-        "Un cont care lovește max drawdown iese din joc (blown).</p>",
+        "<p style='color:#8b949e; font-size:14px;'>Toate metodele folosesc <b>performanța reală</b> din fișier "
+        "(perioada selectată în filtre) și aceeași regulă de payout (reset la 0 la finalul ciclului dacă ești pe plus). "
+        "Comparăm cum se distribuie trade-urile pe conturi ca să vedem <b>ce metodă face cel mai mare profit</b>.</p>",
         unsafe_allow_html=True
     )
 
-    ct_c1, ct_c2, ct_c3 = st.columns(3)
-    with ct_c1:
-        ct_acc_size = st.number_input("Mărime cont ($):", min_value=1000, max_value=500000,
-                                      value=100000, step=1000, key=f"ct_size_{title_prefix}")
-    with ct_c2:
-        ct_max_dd = st.slider("Max Drawdown per cont (%):", 1, 20, 10, key=f"ct_dd_{title_prefix}")
-    with ct_c3:
-        ct_max_accounts = st.slider("Nr. maxim conturi de comparat:", 2, 8, 4, key=f"ct_maxacc_{title_prefix}")
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    with mc1:
+        m_acc = st.slider("Nr. conturi:", 2, 8, 4, key=f"m_acc_{title_prefix}")
+    with mc2:
+        m_size = st.number_input("Mărime cont ($):", min_value=1000, max_value=1000000,
+                                 value=100000, step=5000, key=f"m_size_{title_prefix}")
+    with mc3:
+        m_dd = st.slider("Max Drawdown (%):", 1, 20, 10, key=f"m_dd_{title_prefix}")
+    with mc4:
+        m_days = st.select_slider("Ciclu payout (zile):", options=[7, 14, 15, 30], value=14,
+                                  key=f"m_days_{title_prefix}")
 
-    ct_norm = st.checkbox(
-        "Normalizează la risc fix per trade (recomandat pentru funded)",
-        value=False, key=f"ct_norm_{title_prefix}",
-        help="Dacă e bifat, fiecare trade riscă un procent fix din cont (nu P&L-ul brut din date). "
+    m_norm = st.checkbox(
+        "Normalizează la risc fix per trade",
+        value=False, key=f"m_norm_{title_prefix}",
+        help="Fiecare trade riscă un procent fix din cont (nu P&L-ul brut din date). "
              "Util dacă în date ai poziții de mărimi diferite."
     )
-    ct_risk = None
-    if ct_norm:
-        ct_risk = st.select_slider("Risc per trade (%):", options=[0.25, 0.5, 0.75, 1.0, 1.5, 2.0],
-                                   value=1.0, key=f"ct_risk_{title_prefix}")
+    m_risk = None
+    if m_norm:
+        m_risk = st.select_slider("Risc per trade (%):", options=[0.25, 0.5, 0.75, 1.0, 1.5, 2.0],
+                                  value=1.0, key=f"m_risk_{title_prefix}")
 
-    # Rulăm simularea pentru fiecare nr de conturi × fiecare interval de payout
-    payout_intervals = [7, 14, 30]
-    interval_labels = {7: "7 zile", 14: "14-15 zile", 30: "30 zile"}
+    # Definiția metodelor
+    methods_def = [
+        ("copy_all",     "🟢 Copy — toate deodată",
+         f"Toate cele {m_acc} conturi iau fiecare trade (ca un copy-trader). Profit ≈ {m_acc}× per cont."),
+        ("copy_pairs",   "🔵 2+2 — perechi alternante",
+         "Trade curent pe 2 conturi, următorul pe alte 2. Alternează perechile."),
+        ("individual",   "🟠 Individual — 1 trade / cont",
+         "Un cont pe rând; după fiecare trade (win sau loss) sare la următorul cont."),
+        ("load_balance", "🟣 Load-balance — pe plus, sari pe altul",
+         "Rămâi pe cont până trece pe plus, apoi sari pe contul cel mai în urmă (BE/minus)."),
+    ]
 
-    comparison_rows = []
-    detailed_results = {}  # {(n_acc, interval): result}
+    # Rulăm toate metodele
+    method_results = {}
+    for mkey, mname, mdesc in methods_def:
+        res = simulate_allocation_strategy(df, mkey, m_acc, m_size, m_days, m_dd, risk_per_trade_pct=m_risk)
+        method_results[mkey] = {"name": mname, "desc": mdesc, "res": res}
 
-    for n_acc in range(1, ct_max_accounts + 1):
-        row = {"Strategie": f"{n_acc} cont" + ("uri" if n_acc > 1 else "")}
-        for interval in payout_intervals:
-            res = simulate_copy_trading(
-                df, n_acc, ct_acc_size, interval, ct_max_dd, risk_per_trade_pct=ct_risk
-            )
-            detailed_results[(n_acc, interval)] = res
-            row[f"Payout ({interval_labels[interval]})"] = res["total_payout"]
-            if interval == payout_intervals[-1]:
-                row["Conturi Supraviețuite"] = f"{res['accounts_survived']}/{n_acc}"
-                row["Blown"] = res["blown_count"]
-        comparison_rows.append(row)
+    # Clasament (descrescător după payout)
+    ranking = sorted(method_results.items(), key=lambda kv: kv[1]["res"]["total_payout"], reverse=True)
+    winner_key = ranking[0][0]
+    winner_payout = ranking[0][1]["res"]["total_payout"]
 
-    df_compare = pd.DataFrame(comparison_rows)
-
-    # ── Carduri sumar pentru fiecare strategie (bazat pe ciclul de 14 zile) ──
-    st.markdown("#### 💰 Payout Total per Strategie")
-    strat_cols = st.columns(min(ct_max_accounts, 4))
-    for idx, n_acc in enumerate(range(1, min(ct_max_accounts, 4) + 1)):
-        res14 = detailed_results[(n_acc, 14)]
-        with strat_cols[idx]:
-            surv = res14["accounts_survived"]
-            surv_color = "#00cf8d" if surv == n_acc else ("#ffa500" if surv > 0 else "#ff4b4b")
-            payout_val = res14["total_payout"]
-            # profit per cont pentru referință
-            per_acc = payout_val / n_acc if n_acc > 0 else 0
+    # ── Carduri metode (în ordinea clasamentului) ──
+    st.markdown("#### 🏆 Clasament Metode (după payout total)")
+    m_cols = st.columns(2)
+    medals = ["🥇", "🥈", "🥉", "4️⃣"]
+    for idx, (mkey, mdata) in enumerate(ranking):
+        res = mdata["res"]
+        payout = res["total_payout"]
+        surv = res["accounts_survived"]
+        is_winner = (mkey == winner_key)
+        border = "#00cf8d" if is_winner else "#30363d"
+        bg = "#0d2111" if is_winner else "#161b22"
+        pct_vs_best = (payout / winner_payout * 100) if winner_payout > 0 else 0
+        with m_cols[idx % 2]:
             st.markdown(f"""
-                <div style="background:#161b22; border:1px solid #30363d; border-left:5px solid {surv_color};
-                            border-radius:10px; padding:15px; text-align:center; height:170px;
-                            display:flex; flex-direction:column; justify-content:center;">
-                    <p style="margin:0; font-size:12px; color:#8b949e; text-transform:uppercase;">
-                        {n_acc} cont{"uri" if n_acc > 1 else ""} în paralel
+                <div style="background:{bg}; border:1px solid {border}; border-left:5px solid {border};
+                            border-radius:10px; padding:15px; margin-bottom:10px; min-height:150px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <span style="font-size:15px; font-weight:bold; color:white;">{medals[idx]} {mdata["name"]}</span>
+                        <span style="font-size:11px; color:{'#00cf8d' if is_winner else '#8b949e'};">
+                            {"CÂȘTIGĂTOR" if is_winner else f"{pct_vs_best:.0f}% din top"}
+                        </span>
+                    </div>
+                    <h2 style="color:#00cf8d; margin:10px 0 4px 0;">${payout:,.0f}</h2>
+                    <p style="margin:0 0 8px 0; font-size:12px; color:{'#ffa500' if surv < m_acc else '#8b949e'};">
+                        {surv}/{m_acc} conturi supraviețuiesc
                     </p>
-                    <h2 style="color:#00cf8d; margin:8px 0;">${payout_val:,.0f}</h2>
-                    <p style="margin:0; font-size:12px; color:#8b949e;">${per_acc:,.0f} / cont</p>
-                    <p style="margin:6px 0 0 0; font-size:13px; color:{surv_color};">
-                        {surv}/{n_acc} conturi supraviețuiesc
-                    </p>
+                    <p style="margin:0; font-size:12px; color:#8b949e; line-height:1.4;">{mdata["desc"]}</p>
                 </div>""", unsafe_allow_html=True)
 
-    st.write("")
-
-    # ── Tabel comparativ complet ──
-    st.markdown("#### 📊 Tabel Comparativ (toate intervalele de payout)")
-    df_compare_display = df_compare.copy()
-    for interval in payout_intervals:
-        col = f"Payout ({interval_labels[interval]})"
-        df_compare_display[col] = df_compare_display[col].apply(lambda x: f"${x:,.2f}")
-    st.dataframe(df_compare_display, use_container_width=True, hide_index=True)
+    # ── Anunț câștigător ──
+    second_payout = ranking[1][1]["res"]["total_payout"] if len(ranking) > 1 else 0
+    diff_pct = ((winner_payout - second_payout) / second_payout * 100) if second_payout > 0 else 0
+    st.success(
+        f"🏆 **Cea mai profitabilă metodă: {method_results[winner_key]['name']}** cu "
+        f"**${winner_payout:,.0f}** payout total pe perioada selectată — "
+        f"cu {diff_pct:.0f}% peste următoarea metodă."
+    )
 
     # ── Grafic comparativ ──
-    st.markdown("#### 📈 Payout pe Strategie și Interval")
-    chart_data = []
-    for n_acc in range(1, ct_max_accounts + 1):
-        for interval in payout_intervals:
-            chart_data.append({
-                "Strategie": f"{n_acc} cont" + ("uri" if n_acc > 1 else ""),
-                "Interval": interval_labels[interval],
-                "Payout": detailed_results[(n_acc, interval)]["total_payout"]
+    st.markdown("#### 📊 Payout Total pe Metodă")
+    chart_rows = [{"Metodă": md["name"].split(" ", 1)[1] if " " in md["name"] else md["name"],
+                   "Payout": md["res"]["total_payout"]}
+                  for _, md in method_results.items()]
+    df_mchart = pd.DataFrame(chart_rows).sort_values("Payout", ascending=True)
+    fig_m = px.bar(df_mchart, x="Payout", y="Metodă", orientation="h",
+                   template="plotly_dark", text_auto=".2s",
+                   color="Payout", color_continuous_scale="Greens",
+                   title=f"Payout total pe {m_acc} conturi de ${m_size:,.0f} (ciclu {m_days} zile)")
+    fig_m.update_traces(textposition="outside")
+    fig_m.update_layout(height=350, margin=dict(t=50, b=40, l=0, r=40), coloraxis_showscale=False)
+    st.plotly_chart(fig_m, use_container_width=True, key=f"methods_compare_{title_prefix}")
+
+    # ── Tabel detaliat ──
+    with st.expander("📋 Tabel detaliat pe metode"):
+        table_rows = []
+        for mkey, mdata in ranking:
+            res = mdata["res"]
+            fb = res["first_blown_date"]
+            table_rows.append({
+                "Metodă": mdata["name"],
+                "Payout Total": f"${res['total_payout']:,.2f}",
+                "Conturi Supraviețuite": f"{res['accounts_survived']}/{m_acc}",
+                "Blown": res["blown_count"],
+                "Primul Blown": fb.strftime('%d %b %Y') if fb else "—",
+                "Cicluri": len(res["cycles"]),
             })
-    df_chart = pd.DataFrame(chart_data)
-    fig_compare = px.bar(
-        df_chart, x="Strategie", y="Payout", color="Interval",
-        barmode="group", template="plotly_dark",
-        title="Payout Total: câte conturi rulezi × ce ciclu de payout folosești",
-        color_discrete_sequence=["#4a9eff", "#00cf8d", "#ffa500"],
-        text_auto=".2s"
-    )
-    fig_compare.update_traces(textposition="outside")
-    fig_compare.update_layout(height=420, margin=dict(t=60, b=40, l=0, r=0),
-                              legend=dict(orientation="h", y=1.02))
-    st.plotly_chart(fig_compare, use_container_width=True, key=f"copytrading_compare_{title_prefix}")
-
-    # ── Insight automat ──
-    best_strategy = max(range(1, ct_max_accounts + 1),
-                        key=lambda n: detailed_results[(n, 14)]["total_payout"])
-    best_payout = detailed_results[(best_strategy, 14)]["total_payout"]
-    all_survive = detailed_results[(ct_max_accounts, 14)]["accounts_survived"] == ct_max_accounts
-
-    if all_survive:
-        st.success(
-            f"🟢 **Toate cele {ct_max_accounts} conturi supraviețuiesc** pe acest istoric — "
-            f"strategia cu {ct_max_accounts} conturi în paralel maximizează payout-ul "
-            f"(${best_payout:,.2f} pe ciclu de 14 zile). Riscul de drawdown e sub prag pe tot parcursul."
-        )
-    else:
-        surv_max = detailed_results[(ct_max_accounts, 14)]["accounts_survived"]
-        first_blown = detailed_results[(ct_max_accounts, 14)]["first_blown_date"]
-        blown_str = first_blown.strftime('%d %b %Y') if first_blown else "N/A"
-        st.warning(
-            f"🟡 La {ct_max_accounts} conturi, doar **{surv_max}/{ct_max_accounts} supraviețuiesc** — "
-            f"primul blown pe {blown_str}. Deoarece toate conturile iau aceleași trade-uri, "
-            f"ele ating pragul de drawdown simultan. Ia în calcul un cont mai mare sau un prag DD mai relaxat. "
-            f"Strategia optimă pe acest istoric: **{best_strategy} cont"
-            f"{'uri' if best_strategy > 1 else ''}** (${best_payout:,.2f} / ciclu 14 zile)."
-        )
+        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
     st.markdown(
-        "<small style='color:#8b949e;'>ℹ️ Payout-ul e calculat pe <b>performanța reală</b> din fișier, pentru perioada selectată în filtre. "
-        "La copy-trading pur, conturile identice se comportă la fel — dacă unul se blow-uiește, toate o fac în același punct. "
-        "Diferența de payout între strategii vine din <b>numărul de conturi × payout-ul per cont</b>. "
-        "Normalizarea la risc fix face simularea mai realistă dacă în date ai poziții de mărimi diferite.</small>",
+        "<small style='color:#8b949e;'>ℹ️ <b>Copy toate</b> maximizează profitul dacă toate conturile supraviețuiesc "
+        "(fiecare cont face profitul întreg). <b>Individual</b> și <b>load-balance</b> împart trade-urile, "
+        "deci fac mai puțin profit total — dar reduc riscul ca toate conturile să fie blown simultan de o serie proastă. "
+        "Compromisul e între <b>profit maxim</b> (copy) și <b>diversificarea riscului</b> (individual/load-balance).</small>",
         unsafe_allow_html=True
     )
+
 
     render_weekly_calendar(df, title_prefix)
 
