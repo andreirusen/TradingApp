@@ -218,8 +218,18 @@ def simulate_payout_timeline(df, num_accounts, payout_days):
 def simulate_copy_trading(df, num_accounts, account_size, payout_days, max_dd_pct, risk_per_trade_pct=None):
     """
     Simulare COPY-TRADING: toate conturile iau EXACT aceleași trade-uri (în paralel).
-    Un cont e 'blown' când drawdown-ul de la peak depășește max_dd_pct din account_size.
-    Conturile blown nu mai contribuie la payout.
+    Payout-ul e bazat pe PERFORMANȚA REALĂ din fișier pe perioada selectată.
+
+    Reguli realiste de payout (ca la contul tău funded):
+      - La finalul fiecărui ciclu, dacă balanța contului e pe PLUS, iei payout =
+        toată balanța și RESETEZI contul la 0 (începi ciclul următor de la zero).
+      - Dacă la finalul ciclului ești pe MINUS, payout = 0 și contul NU se resetează;
+        deficitul se reportează în ciclul următor (continui până revii pe plus la un payout).
+      - Un cont e 'blown' când drawdown-ul de la peak depășește max_dd_pct din account_size;
+        conturile blown ies din joc și nu mai iau payout.
+      - Exemplu: ciclu 1 = +850$ → payout 850$, reset la 0. Ciclu 2 = -400$ → payout 0,
+        cont rămâne la -400$. Ciclu 3 pornește de la -400$; dacă faci +650$ ajungi la +250$
+        → la finalul ciclului payout 250$, reset.
 
     Params:
       df                : dataframe cu trade-urile (are 'Entry Time', 'Net P&L USD')
@@ -227,39 +237,45 @@ def simulate_copy_trading(df, num_accounts, account_size, payout_days, max_dd_pc
       account_size      : mărimea unui cont ($) — pentru pragul de drawdown
       payout_days       : lungimea unui ciclu de payout (zile)
       max_dd_pct        : max drawdown permis (%) înainte de blown
-      risk_per_trade_pct: dacă e setat, normalizează P&L la % din cont (risc fix per trade);
-                          dacă e None, folosește P&L-ul real din date (scalat 1:1)
+      risk_per_trade_pct: dacă e setat, normalizează fiecare trade la % fix din cont;
+                          dacă e None, folosește P&L-ul REAL din date (1:1) — implicit.
 
     Returnează dict cu:
-      total_payout, cycles (listă), accounts_survived, first_blown_date, blown_count
+      total_payout, cycles, accounts_survived, first_blown_date, blown_count,
+      net_profit_per_account (profitul net real al unui cont, din date)
     """
     df_sorted = df.sort_values('Entry Time').copy()
     if df_sorted.empty:
         return {"total_payout": 0.0, "cycles": [], "accounts_survived": num_accounts,
-                "blown_count": 0, "first_blown_date": None, "num_accounts": num_accounts}
+                "blown_count": 0, "first_blown_date": None, "num_accounts": num_accounts,
+                "net_profit_per_account": 0.0}
 
     max_dd_usd = account_size * (max_dd_pct / 100.0)
 
-    # Fiecare cont: cumulativ, peak, activ/blown. Toate iau aceleași trade-uri.
+    # Fiecare cont: balanță cumulativă, peak (pt drawdown), activ/blown.
     balances = [0.0] * num_accounts
     peaks = [0.0] * num_accounts
     active = [True] * num_accounts
 
     payout_interval = timedelta(days=payout_days)
     cycle_start = df_sorted['Entry Time'].iloc[0]
-    cycle_start_balances = [0.0] * num_accounts  # balanța la începutul ciclului per cont
     cycles = []
     trades_in_cycle = 0
     first_blown_date = None
 
     def close_cycle(end_time):
-        """Payout ciclu = suma profitului pozitiv realizat în ciclu de conturile active."""
+        """La finalul ciclului: dacă balanța e pe PLUS, iei payout = toată balanța și
+        RESETEZI contul la 0. Dacă e pe MINUS, payout = 0, contul NU se resetează —
+        deficitul se reportează în ciclul următor (continui până revii pe plus la un payout)."""
         cycle_payout = 0.0
         for i in range(num_accounts):
-            gain_in_cycle = balances[i] - cycle_start_balances[i]
-            # doar conturile care au fost active și au profit pozitiv în ciclu
-            if gain_in_cycle > 0:
-                cycle_payout += gain_in_cycle
+            if not active[i]:
+                continue
+            if balances[i] > 0:
+                cycle_payout += balances[i]
+                balances[i] = 0.0       # reset cont la 0 după payout
+                peaks[i] = 0.0          # resetăm și peak-ul (cont nou, de la 0)
+            # dacă balanța <= 0: nu iei payout, deficitul rămâne, peak-ul rămâne
         worst_dd = min([balances[i] - peaks[i] for i in range(num_accounts)]) if num_accounts else 0.0
         cycles.append({
             "Interval": f"{cycle_start.strftime('%d %b')} - {end_time.strftime('%d %b')}",
@@ -275,7 +291,6 @@ def simulate_copy_trading(df, num_accounts, account_size, payout_days, max_dd_pc
         if row['Entry Time'] >= cycle_start + payout_interval:
             close_cycle(cycle_start + payout_interval)
             cycle_start = row['Entry Time']
-            cycle_start_balances = balances.copy()
             trades_in_cycle = 0
 
         pnl_real = row['Net P&L USD']
@@ -306,6 +321,13 @@ def simulate_copy_trading(df, num_accounts, account_size, payout_days, max_dd_pc
     close_cycle(df_sorted['Entry Time'].iloc[-1])
 
     total_payout = sum(c["Payout"] for c in cycles)
+    # profitul net real al unui singur cont (din date, cu/fără normalizare)
+    if risk_per_trade_pct is not None:
+        unit = account_size * (risk_per_trade_pct / 100.0)
+        net_profit_per_account = sum(unit if x > 0 else -unit for x in df_sorted['Net P&L USD'])
+    else:
+        net_profit_per_account = float(df_sorted['Net P&L USD'].sum())
+
     return {
         "total_payout": total_payout,
         "cycles": cycles,
@@ -313,6 +335,7 @@ def simulate_copy_trading(df, num_accounts, account_size, payout_days, max_dd_pc
         "blown_count": num_accounts - sum(active),
         "first_blown_date": first_blown_date,
         "num_accounts": num_accounts,
+        "net_profit_per_account": net_profit_per_account,
     }
 
 
@@ -1103,8 +1126,9 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
     st.markdown("---")
     st.markdown("### 🔄 Comparație Strategii Copy-Trading")
     st.markdown(
-        "<p style='color:#8b949e; font-size:14px;'>Toate conturile iau <b>exact aceleași trade-uri</b> în paralel. "
-        "Compară cât face dacă rulezi 1, 2, 3 sau 4 conturi simultan. "
+        "<p style='color:#8b949e; font-size:14px;'>Toate conturile iau <b>exact aceleași trade-uri</b> din perioada selectată, în paralel. "
+        "La finalul fiecărui ciclu, dacă un cont e pe plus iei payout = toată balanța și contul se <b>resetează la 0</b>; "
+        "dacă e pe minus, payout 0 și deficitul se reportează până revii pe plus la un payout. "
         "Un cont care lovește max drawdown iese din joc (blown).</p>",
         unsafe_allow_html=True
     )
@@ -1234,10 +1258,10 @@ def render_full_analysis(df, title_prefix, selected_months_list, df_streak=None)
         )
 
     st.markdown(
-        "<small style='color:#8b949e;'>ℹ️ La copy-trading pur, conturile identice se comportă la fel — "
-        "dacă unul se blow-uiește, toate o fac în același punct. Diferența de payout între strategii vine din "
-        "<b>numărul de conturi × profitul per cont</b>. Normalizarea la risc fix face simularea mai realistă "
-        "dacă în date ai poziții de mărimi diferite.</small>",
+        "<small style='color:#8b949e;'>ℹ️ Payout-ul e calculat pe <b>performanța reală</b> din fișier, pentru perioada selectată în filtre. "
+        "La copy-trading pur, conturile identice se comportă la fel — dacă unul se blow-uiește, toate o fac în același punct. "
+        "Diferența de payout între strategii vine din <b>numărul de conturi × payout-ul per cont</b>. "
+        "Normalizarea la risc fix face simularea mai realistă dacă în date ai poziții de mărimi diferite.</small>",
         unsafe_allow_html=True
     )
 
