@@ -141,14 +141,10 @@ def get_streak_probabilities(df):
         next_is_win = 1 if results[i+1] == 'Win' else 0
         next_pnl = float(df_sorted.iloc[i+1]['Net P&L USD'])
         target_dict = win_streaks if curr_type == 'Win' else loss_streaks
-        if curr_streak_len not in target_dict: target_dict[curr_streak_len] = [0, 0, 0.0, 0.0, 0]
+        if curr_streak_len not in target_dict: target_dict[curr_streak_len] = [0, 0, 0.0]
         target_dict[curr_streak_len][0] += next_is_win
         target_dict[curr_streak_len][1] += 1
         target_dict[curr_streak_len][2] += next_pnl
-        if next_is_win:
-            target_dict[curr_streak_len][3] += next_pnl
-        else:
-            target_dict[curr_streak_len][4] += 1
 
     last_streak_type = results[-1]
     active_streak_len = 0
@@ -162,14 +158,9 @@ def get_streak_probabilities(df):
         for k in sorted(d.keys()):
             prob = (d[k][0] / d[k][1]) * 100
             expectancy = d[k][2] / d[k][1]
-            win_avg = d[k][3] / d[k][0] if d[k][0] else 0
-            loss_count = d[k][1] - d[k][0]
-            loss_avg = (d[k][2] - d[k][3]) / loss_count if loss_count else 0
             data.append({
                 "Șir curent": f"{k} {label}",
                 "Probabilitate Win Următor": f"{prob:.1f}%",
-                "$ Win Avg": f"${win_avg:+,.2f}",
-                "$ Loss Avg": f"${loss_avg:+,.2f}",
                 "$ Expectancy": f"${expectancy:+,.2f}",
                 "Eșantion": f"{d[k][1]} ori"
             })
