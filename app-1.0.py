@@ -139,12 +139,10 @@ def get_streak_probabilities(df):
             if results[i] == results[i-1]: curr_streak_len += 1
             else: curr_streak_len, curr_type = 1, results[i]
         next_is_win = 1 if results[i+1] == 'Win' else 0
-        next_pnl = float(df_sorted.iloc[i+1]['Net P&L USD'])
         target_dict = win_streaks if curr_type == 'Win' else loss_streaks
-        if curr_streak_len not in target_dict: target_dict[curr_streak_len] = [0, 0, 0.0]
+        if curr_streak_len not in target_dict: target_dict[curr_streak_len] = [0, 0]
         target_dict[curr_streak_len][0] += next_is_win
         target_dict[curr_streak_len][1] += 1
-        target_dict[curr_streak_len][2] += next_pnl
 
     last_streak_type = results[-1]
     active_streak_len = 0
@@ -157,13 +155,7 @@ def get_streak_probabilities(df):
         data = []
         for k in sorted(d.keys()):
             prob = (d[k][0] / d[k][1]) * 100
-            expectancy = d[k][2] / d[k][1]
-            data.append({
-                "Șir curent": f"{k} {label}",
-                "Probabilitate Win Următor": f"{prob:.1f}%",
-                "$ Expectancy": f"${expectancy:+,.2f}",
-                "Eșantion": f"{d[k][1]} ori"
-            })
+            data.append({"Șir curent": f"{k} {label}", "Probabilitate Win Următor": f"{prob:.1f}%", "Eșantion": f"{d[k][1]} ori"})
         return pd.DataFrame(data)
 
     return format_dict(win_streaks, "Win"), format_dict(loss_streaks, "Loss"), active_streak_label
