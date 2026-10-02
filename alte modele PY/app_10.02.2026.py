@@ -15,8 +15,6 @@ import plotly.graph_objects as go
 
 # PDF import
 from pdf_report import generate_full_pdf_report
-# MT5 import
-from mt5_analysis import render_mt5_page, is_mt5_report
 
 # 2. CONFIGURARE PAGINĂ ȘI DESIGN
 st.set_page_config(page_title="TradingView Payout & Strategy", page_icon="logo-lvlup.png", layout="wide")
@@ -2140,22 +2138,6 @@ else:
 # ══════════════════════════════════════════════════════════════
 # SECȚIUNEA ORIGINALĂ — ÎNCĂRCARE FIȘIER TRADING
 # ══════════════════════════════════════════════════════════════
-st.markdown("---")
-sursa_date = st.radio(
-    "📂 Sursa datelor de trading:",
-    ["📊 TradingView (List of trades)", "🤖 MetaTrader 5 (Strategy Tester / History)"],
-    horizontal=True,
-    key="sursa_date",
-)
-
-if sursa_date.startswith("🤖"):
-    # ── ANALIZĂ SEPARATĂ STRICT PENTRU MT5 ──
-    render_mt5_page(
-        render_full_analysis, render_risk_management, render_monte_carlo,
-        render_advanced_analysis, generate_full_pdf_report,
-    )
-    st.stop()
-
 uploaded_file = st.file_uploader("Încarcă fișierul .XLSX", type=["xlsx"])
 
 if uploaded_file:
@@ -2168,10 +2150,6 @@ if uploaded_file:
         _sheet_candidates = ['List of trades', 'Trades', 'trades', 'list of trades']
         _sheet_name = next((s for s in _sheet_candidates if s in _sheets), None)
         if _sheet_name is None:
-            if is_mt5_report(uploaded_file.getvalue()):
-                st.warning("🤖 Acesta pare un raport MetaTrader 5. Selectează mai sus "
-                           "„MetaTrader 5” ca sursă de date și încarcă-l acolo.")
-                st.stop()
             st.error(f"Nu am găsit o foaie de trades în fișier. Foi disponibile: {_sheets}")
             st.stop()
 
