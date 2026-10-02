@@ -762,17 +762,20 @@ def render_mt5_next_trade(df, get_streak_probabilities):
 # ══════════════════════════════════════════════════════════════
 # TAB — CONTURI FUNDED (simulare payout-uri)
 # ══════════════════════════════════════════════════════════════
+PAYOUT_FIX = "Ciclu fix (ex. FundedNext)"
+PAYOUT_FLEX = "Flexibil (după N zile)"
+
 FUNDED_DEFAULT = pd.DataFrame([{
     "Nume": "Cont 1", "Mărime ($)": 100000.0, "Nr. conturi": 1, "Risc/trade (%)": 1.0,
-    "Max DD (%)": 10.0, "Daily DD (%)": 5.0, "Target payout (%)": 5.0, "Min payout (%)": 1.0,
-    "Zile payout": 14, "Profit split (%)": 80.0, "Cost cont ($)": 0.0,
+    "Max DD (%)": 10.0, "Daily DD (%)": 5.0, "Tip payout": "Flexibil (după N zile)", "Zile payout": 15,
+    "Target payout (%)": 5.0, "Min payout (%)": 0.0, "Profit split (%)": 80.0, "Cost cont ($)": 0.0,
 }])
 
 
 FUNDED_DEFAULT_ABS = pd.DataFrame([{
     "Nume": "Cont 1", "Mărime ($)": 50000.0, "Nr. conturi": 1, "Multiplicator (×)": 1.0,
-    "Max DD (%)": 10.0, "Daily DD (%)": 5.0, "Target payout (%)": 5.0, "Min payout (%)": 1.0,
-    "Zile payout": 14, "Profit split (%)": 80.0, "Cost cont ($)": 0.0,
+    "Max DD (%)": 10.0, "Daily DD (%)": 5.0, "Tip payout": "Flexibil (după N zile)", "Zile payout": 15,
+    "Target payout (%)": 5.0, "Min payout (%)": 0.0, "Profit split (%)": 80.0, "Cost cont ($)": 0.0,
 }])
 
 
@@ -787,6 +790,7 @@ def simulate_funded_account(trades, acc, risk_ea, period_start, opts):
     target = float(acc["Target payout (%)"]) / 100
     min_pay = float(acc["Min payout (%)"]) / 100
     n_days = int(acc["Zile payout"])
+    fixed_cycle = str(acc.get("Tip payout", PAYOUT_FLEX)).startswith("Ciclu")
     split = float(acc["Profit split (%)"]) / 100
     fee = float(acc["Cost cont ($)"])
     abs_mode = opts.get('mode') == 'abs'
@@ -796,6 +800,7 @@ def simulate_funded_account(trades, acc, risk_ea, period_start, opts):
         scale = float(acc["Risc/trade (%)"]) / risk_ea if risk_ea else 1.0
 
     payouts, fails, curve, instances = [], [], [], []
+    cycles_no_profit = 0
     instance, active = 1, True
     total_cost = fee
     bal = peak = size
@@ -809,6 +814,25 @@ def simulate_funded_account(trades, acc, risk_ea, period_start, opts):
         instances.append({**inst, 'Închis la': end_time, 'Status': status, 'Motiv': reason,
                           'Zile activ': (end_time - inst['Cumpărat la']).days,
                           'Cost': fee, 'Net (încasat − cost)': inst['Încasat'] - fee})
+
+    def _do_payout(when, profit, days, reason):
+        nonlocal bal, peak, day_start, cycle_start, cycle_no, cyc_trades, cyc_min, cyc_worst_day
+        gross = min(profit, size * target) if opts['cap_target'] else profit
+        payouts.append({'Instanță': instance, 'Ciclu': cycle_no, 'Ciclu început': cycle_start,
+                        'Data payout': when, 'Zile ciclu': round(days, 1), 'Trade-uri': cyc_trades,
+                        'Profit brut': gross, 'Profit %': gross / size * 100,
+                        'Payout trader': gross * split, 'Partea firmei': gross * (1 - split),
+                        'Motiv': reason, 'Min balanță ciclu %': (cyc_min / size - 1) * 100,
+                        'Cea mai proastă zi %': cyc_worst_day,
+                        'Buffer DD folosit %': max(0.0, (size - cyc_min) / (size * max_dd) * 100) if max_dd else 0})
+        inst['Payout-uri'] += 1
+        inst['Încasat'] += gross * split
+        curve.append({'Time': when, 'Balance': size, 'Instanță': instance, 'Event': 'PAYOUT'})
+        bal = peak = size
+        day_start = size
+        cycle_start = when
+        cycle_no += 1
+        cyc_trades, cyc_min, cyc_worst_day = 0, size, 0.0
 
     for t in trades.itertuples(index=False):
         tr = t._asdict()
@@ -825,6 +849,17 @@ def simulate_funded_account(trades, acc, risk_ea, period_start, opts):
             curve.append({'Time': cycle_start, 'Balance': size, 'Instanță': instance, 'Event': 'Cont nou'})
 
         ex = tr['Exit_Time']
+        # ── Ciclu fix: la fiecare N zile, dacă e profit → payout + reset; altfel ciclul nou pornește cu balanța curentă
+        if fixed_cycle:
+            boundary = cycle_start + pd.Timedelta(days=n_days)
+            while ex >= boundary:
+                prof_b = bal - size
+                if prof_b > 0 and prof_b >= size * min_pay - 1e-9:
+                    _do_payout(boundary, prof_b, n_days, f'Final ciclu {n_days} zile')
+                else:
+                    cycles_no_profit += 1
+                    cycle_start = boundary
+                boundary = cycle_start + pd.Timedelta(days=n_days)
         if ex.date() != day:
             day, day_start, day_trades = ex.date(), bal, 0
         bal_before = bal
@@ -871,30 +906,12 @@ def simulate_funded_account(trades, acc, risk_ea, period_start, opts):
             continue
 
         curve.append({'Time': ex, 'Balance': bal, 'Instanță': instance, 'Event': ''})
-        profit = bal - size
-        days = (ex - cycle_start).total_seconds() / 86400
-        pay_reason = None
-        if profit >= size * target - 1e-9 and (opts['target_early'] or days >= n_days):
-            pay_reason = 'Target atins'
-        elif days >= n_days and profit >= size * min_pay - 1e-9 and profit > 0:
-            pay_reason = f'Termen {n_days} zile'
-        if pay_reason:
-            gross = min(profit, size * target) if opts['cap_target'] else profit
-            payouts.append({'Instanță': instance, 'Ciclu': cycle_no, 'Ciclu început': cycle_start,
-                            'Data payout': ex, 'Zile ciclu': round(days, 1), 'Trade-uri': cyc_trades,
-                            'Profit brut': gross, 'Profit %': gross / size * 100,
-                            'Payout trader': gross * split, 'Partea firmei': gross * (1 - split),
-                            'Motiv': pay_reason, 'Min balanță ciclu %': (cyc_min / size - 1) * 100,
-                            'Cea mai proastă zi %': cyc_worst_day,
-                            'Buffer DD folosit %': max(0.0, (size - cyc_min) / (size * max_dd) * 100) if max_dd else 0})
-            inst['Payout-uri'] += 1
-            inst['Încasat'] += gross * split
-            curve.append({'Time': ex, 'Balance': size, 'Instanță': instance, 'Event': 'PAYOUT'})
-            bal = peak = size
-            day_start = size
-            cycle_start = ex
-            cycle_no += 1
-            cyc_trades, cyc_min, cyc_worst_day = 0, size, 0.0
+        if not fixed_cycle:
+            # Flexibil: poți cere payout doar după minim N zile; ceri când profitul atinge target-ul
+            profit = bal - size
+            days = (ex - cycle_start).total_seconds() / 86400
+            if days >= n_days and profit >= size * target - 1e-9 and profit > 0:
+                _do_payout(ex, profit, days, f'Target atins (după {n_days}+ zile)')
 
     last_time = trades['Exit_Time'].max() if len(trades) else cycle_start
     if active:
@@ -902,7 +919,8 @@ def simulate_funded_account(trades, acc, risk_ea, period_start, opts):
     state = {'Activ': active, 'Balanță curentă': bal if active else None,
              'Profit neîncasat': (bal - size) if active else 0.0,
              'Zile ciclu curent': (last_time - cycle_start).days if active and len(trades) else 0,
-             'Instanțe (conturi cumpărate)': instance, 'Cost total': total_cost}
+             'Instanțe (conturi cumpărate)': instance, 'Cost total': total_cost,
+             'Cicluri fără profit': cycles_no_profit}
     return pd.DataFrame(payouts), pd.DataFrame(fails), pd.DataFrame(curve), state, pd.DataFrame(instances)
 
 
@@ -956,12 +974,24 @@ def render_mt5_funded(trades_all, risk_ea=1.0, mode='pct'):
 
     # ── Conturi ──
     st.markdown("### 🧾 Conturile tale funded")
-    st.caption("Adaugă / șterge rânduri cu ➕ / 🗑️. „Nr. conturi” = câte conturi identice ai cu aceleași reguli. "
-               "„Target payout” = profitul la care se cere payout imediat; „Min payout” = profitul minim ca să ceri la termen.")
+    st.caption("Adaugă / șterge rânduri cu ➕ / 🗑️. „Nr. conturi” = câte conturi identice ai cu aceleași reguli.")
+    st.markdown(f"""<div style='background:#161b22;border:1px solid #30363d;border-radius:8px;padding:10px 14px;font-size:13px;'>
+    <b>Tip payout</b><br>
+    • <b>{PAYOUT_FLEX}</b> — payout-ul se poate cere doar după minim „Zile payout” de la start / ultimul payout.
+      Poți continua cât vrei; ceri payout când profitul atinge <b>Target payout</b>. Apoi contul se resetează.<br>
+    • <b>{PAYOUT_FIX}</b> — ciclu automat de „Zile payout”. La finalul fiecărui ciclu, dacă ai profit
+      (orice sumă ≥ <b>Min payout</b>, implicit 0) îl retragi și contul se resetează; dacă nu ai profit,
+      începe un ciclu nou cu balanța curentă. Target-ul nu se folosește aici (doar dacă bifezi plafonarea).
+    </div>""", unsafe_allow_html=True)
+    st.write("")
     base_default = FUNDED_DEFAULT_ABS if mode == 'abs' else FUNDED_DEFAULT
     ss_key = f"fd_accounts_{mode}"
     if ss_key not in st.session_state:
         st.session_state[ss_key] = base_default.copy()
+    for _c, _v in base_default.iloc[0].items():          # compatibilitate cu sesiuni mai vechi
+        if _c not in st.session_state[ss_key].columns:
+            st.session_state[ss_key][_c] = _v
+    st.session_state[ss_key] = st.session_state[ss_key][list(base_default.columns)]
     scale_cfg = ({"Multiplicator (×)": st.column_config.NumberColumn(min_value=0.1, max_value=100.0, step=0.5,
                                                                     format="%.2f", required=True)}
                  if mode == 'abs' else
@@ -977,6 +1007,7 @@ def render_mt5_funded(trades_all, risk_ea=1.0, mode='pct'):
             **scale_cfg,
             "Max DD (%)": st.column_config.NumberColumn(min_value=0.5, max_value=50.0, step=0.5, required=True),
             "Daily DD (%)": st.column_config.NumberColumn(min_value=0.5, max_value=50.0, step=0.5, required=True),
+            "Tip payout": st.column_config.SelectboxColumn(options=[PAYOUT_FLEX, PAYOUT_FIX], required=True, width="medium"),
             "Target payout (%)": st.column_config.NumberColumn(min_value=0.1, max_value=100.0, step=0.5, required=True),
             "Min payout (%)": st.column_config.NumberColumn(min_value=0.0, max_value=100.0, step=0.1, required=True),
             "Zile payout": st.column_config.NumberColumn(min_value=1, max_value=90, step=1, required=True),
@@ -1000,15 +1031,13 @@ def render_mt5_funded(trades_all, risk_ea=1.0, mode='pct'):
             daily_base = st.radio("Daily DD calculat din:", ["Mărimea contului", "Balanța de la începutul zilei"],
                                   key="fd_dailybase")
         with c2:
-            target_early = st.checkbox("La atingerea target-ului se cere payout imediat (fără să aștepte termenul)",
-                                       value=True, key="fd_early")
             cap_target = st.checkbox("Payout plafonat la target (excedentul nu se plătește)", value=False, key="fd_cap")
             rebuy = st.checkbox("După fail, cumpăr un cont nou și continui", value=True, key="fd_rebuy")
         st.caption("⚠️ Simularea folosește balanța la închiderea trade-urilor. Equity-ul intraday (pozițiile deschise) "
                    "poate atinge limitele mai devreme — verifică Equity DD din „Raport MT5”.")
     opts = {'dd_type': 'static' if dd_type.startswith('Static') else 'trailing',
             'daily_base': 'cont' if daily_base.startswith('Mărimea') else 'zi',
-            'target_early': target_early, 'cap_target': cap_target, 'rebuy': rebuy, 'mode': mode}
+            'cap_target': cap_target, 'rebuy': rebuy, 'mode': mode}
 
     # ── Simulare ──
     all_pay, all_fail, all_inst, curves, rows = [], [], [], {}, []
@@ -1050,7 +1079,7 @@ def render_mt5_funded(trades_all, risk_ea=1.0, mode='pct'):
                              f"({state['Zile ciclu curent']} zile)") if state['Activ']
                             else f"❌ pierdut ({fail.iloc[-1]['Motiv']}, {fail.iloc[-1]['Data fail']:%d.%m.%Y})",
             '_net': (tot_trader - cost) * n, '_trader': tot_trader * n, '_cost': cost * n,
-            '_fails': len(fail) * n,
+            '_fails': len(fail) * n, '_noprof': state.get('Cicluri fără profit', 0),
         })
     pay_df = pd.concat(all_pay, ignore_index=True) if all_pay else pd.DataFrame()
     fail_df = pd.concat(all_fail, ignore_index=True) if all_fail else pd.DataFrame()
@@ -1086,11 +1115,13 @@ def render_mt5_funded(trades_all, risk_ea=1.0, mode='pct'):
             ("Zile între payout-uri", f"{gaps.mean():.1f}" if len(gaps) else f"{pay_df['Zile ciclu'].mean():.1f}",
              '#58a6ff', f"max pauză: {gaps.max():.0f} zile" if len(gaps) else ''),
         ])
-        by_reason = pay_df['Motiv'].value_counts()
+        n_tgt = int(pay_df['Motiv'].str.startswith('Target').sum())
+        n_noprof = int(summ['_noprof'].sum())
         _cards_row([
-            ("Prin target atins", f"{by_reason.get('Target atins', 0)}", '#00cf8d',
-             f"{by_reason.get('Target atins', 0) / len(pay_df) * 100:.0f}% din cicluri"),
-            ("Prin termen", f"{len(pay_df) - by_reason.get('Target atins', 0)}", '#58a6ff', "profit sub target la termen"),
+            ("Prin target atins (flexibil)", f"{n_tgt}", '#00cf8d',
+             f"{n_tgt / len(pay_df) * 100:.0f}% din payout-uri"),
+            ("La final de ciclu fix", f"{len(pay_df) - n_tgt}", '#58a6ff',
+             f"cicluri fără profit: {n_noprof}"),
             ("Trade-uri medii / payout", f"{pay_df['Trade-uri'].mean():.1f}", '#e6edf3'),
             ("Buffer DD folosit (max)", f"{pay_df['Buffer DD folosit %'].max():.0f}%",
              '#ff4b4b' if pay_df['Buffer DD folosit %'].max() > 70 else '#00cf8d',
@@ -1103,7 +1134,7 @@ def render_mt5_funded(trades_all, risk_ea=1.0, mode='pct'):
         st.success("✅ Niciun cont pierdut în perioada aleasă.")
 
     st.markdown("#### Pe fiecare cont")
-    st.dataframe(summ.drop(columns=['_net', '_trader', '_cost', '_fails']), use_container_width=True, hide_index=True)
+    st.dataframe(summ.drop(columns=['_net', '_trader', '_cost', '_fails', '_noprof']), use_container_width=True, hide_index=True)
 
     if pay_df.empty:
         st.info("Niciun payout în perioada aleasă — încearcă o perioadă mai lungă, un target mai mic sau mai puține zile.")
@@ -1249,8 +1280,9 @@ def render_mt5_funded(trades_all, risk_ea=1.0, mode='pct'):
             fig_a.add_trace(go.Scatter(x=fe['Time'], y=fe['Balance'], mode='markers', name='Fail',
                                        marker=dict(symbol='x', size=12, color='#ff4b4b'), text=fe['Event'],
                                        hoverinfo='text+x'))
-        fig_a.add_hline(y=size * (1 + float(acc['Target payout (%)']) / 100), line_dash='dot',
-                        line_color='#00cf8d', annotation_text='Target payout')
+        if not str(acc.get('Tip payout', PAYOUT_FLEX)).startswith('Ciclu'):
+            fig_a.add_hline(y=size * (1 + float(acc['Target payout (%)']) / 100), line_dash='dot',
+                            line_color='#00cf8d', annotation_text='Target payout')
         if opts['dd_type'] == 'static':
             fig_a.add_hline(y=size * (1 - float(acc['Max DD (%)']) / 100), line_dash='dash',
                             line_color='#ff4b4b', annotation_text='Max DD')
