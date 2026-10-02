@@ -750,6 +750,378 @@ def render_mt5_next_trade(df, get_streak_probabilities):
                f"Rândurile cu eșantion sub 10 sunt statistic nesigure.")
 
 # ══════════════════════════════════════════════════════════════
+# TAB — CONTURI FUNDED (simulare payout-uri)
+# ══════════════════════════════════════════════════════════════
+FUNDED_DEFAULT = pd.DataFrame([{
+    "Nume": "Cont 1", "Mărime ($)": 100000.0, "Nr. conturi": 1, "Risc/trade (%)": 1.0,
+    "Max DD (%)": 10.0, "Daily DD (%)": 5.0, "Target payout (%)": 5.0, "Min payout (%)": 1.0,
+    "Zile payout": 14, "Profit split (%)": 80.0, "Cost cont ($)": 0.0,
+}])
+
+
+def simulate_funded_account(trades, acc, risk_ea, period_start, opts):
+    """Simulează UN cont funded pe trade-urile date (ordonate după Exit Time).
+    P&L-ul fiecărui trade = Return % al trade-ului MT5 × (risc cont / risc EA) × balanța curentă.
+    Contul se resetează la mărimea inițială după fiecare payout."""
+    size = float(acc["Mărime ($)"])
+    max_dd = float(acc["Max DD (%)"]) / 100
+    daily_dd = float(acc["Daily DD (%)"]) / 100
+    target = float(acc["Target payout (%)"]) / 100
+    min_pay = float(acc["Min payout (%)"]) / 100
+    n_days = int(acc["Zile payout"])
+    split = float(acc["Profit split (%)"]) / 100
+    fee = float(acc["Cost cont ($)"])
+    scale = float(acc["Risc/trade (%)"]) / risk_ea if risk_ea else 1.0
+
+    payouts, fails, curve = [], [], []
+    instance, active = 1, True
+    total_cost = fee
+    bal = peak = size
+    cycle_start = pd.Timestamp(period_start)
+    cycle_no, cyc_trades, cyc_min, cyc_worst_day = 1, 0, size, 0.0
+    day, day_start = None, size
+    curve.append({'Time': cycle_start, 'Balance': size, 'Instanță': instance, 'Event': 'Start'})
+
+    for t in trades.itertuples(index=False):
+        tr = t._asdict()
+        if not active:
+            if not opts['rebuy']:
+                break
+            instance += 1
+            total_cost += fee
+            bal = peak = size
+            cycle_start = tr['Entry_Time']
+            cycle_no, cyc_trades, cyc_min, cyc_worst_day = 1, 0, size, 0.0
+            day, day_start, active = None, size, True
+            curve.append({'Time': cycle_start, 'Balance': size, 'Instanță': instance, 'Event': 'Cont nou'})
+
+        ex = tr['Exit_Time']
+        if ex.date() != day:
+            day, day_start = ex.date(), bal
+        pnl = bal * (tr['Return_pct'] / 100.0) * scale
+        bal += pnl
+        cyc_trades += 1
+        peak = max(peak, bal)
+        cyc_min = min(cyc_min, bal)
+        day_base = size if opts['daily_base'] == 'cont' else day_start
+        day_loss_pct = (bal - day_start) / day_base * 100
+        cyc_worst_day = min(cyc_worst_day, day_loss_pct)
+
+        floor = size * (1 - max_dd) if opts['dd_type'] == 'static' else min(peak, size * (1 + max_dd)) - size * max_dd
+        reason = None
+        if day_start - bal >= day_base * daily_dd - 1e-9:
+            reason = 'Daily DD'
+        elif bal <= floor + 1e-9:
+            reason = 'Max DD'
+        if reason:
+            fails.append({'Instanță': instance, 'Data fail': ex, 'Motiv': reason,
+                          'Ciclu început': cycle_start, 'Zile în ciclu': (ex - cycle_start).days,
+                          'Trade-uri în ciclu': cyc_trades, 'Balanță la fail': bal,
+                          'Pierdere vs mărime': bal - size, 'Payout-uri înainte': cycle_no - 1})
+            curve.append({'Time': ex, 'Balance': bal, 'Instanță': instance, 'Event': f'FAIL ({reason})'})
+            active = False
+            continue
+
+        curve.append({'Time': ex, 'Balance': bal, 'Instanță': instance, 'Event': ''})
+        profit = bal - size
+        days = (ex - cycle_start).total_seconds() / 86400
+        pay_reason = None
+        if profit >= size * target - 1e-9 and (opts['target_early'] or days >= n_days):
+            pay_reason = 'Target atins'
+        elif days >= n_days and profit >= size * min_pay - 1e-9 and profit > 0:
+            pay_reason = f'Termen {n_days} zile'
+        if pay_reason:
+            gross = min(profit, size * target) if opts['cap_target'] else profit
+            payouts.append({'Instanță': instance, 'Ciclu': cycle_no, 'Ciclu început': cycle_start,
+                            'Data payout': ex, 'Zile ciclu': round(days, 1), 'Trade-uri': cyc_trades,
+                            'Profit brut': gross, 'Profit %': gross / size * 100,
+                            'Payout trader': gross * split, 'Partea firmei': gross * (1 - split),
+                            'Motiv': pay_reason, 'Min balanță ciclu %': (cyc_min / size - 1) * 100,
+                            'Cea mai proastă zi %': cyc_worst_day,
+                            'Buffer DD folosit %': max(0.0, (size - cyc_min) / (size * max_dd) * 100) if max_dd else 0})
+            curve.append({'Time': ex, 'Balance': size, 'Instanță': instance, 'Event': 'PAYOUT'})
+            bal = peak = size
+            day_start = size
+            cycle_start = ex
+            cycle_no += 1
+            cyc_trades, cyc_min, cyc_worst_day = 0, size, 0.0
+
+    state = {'Activ': active, 'Balanță curentă': bal if active else None,
+             'Profit neîncasat': (bal - size) if active else 0.0,
+             'Zile ciclu curent': (trades['Exit_Time'].max() - cycle_start).days if active and len(trades) else 0,
+             'Instanțe (conturi cumpărate)': instance, 'Cost total': total_cost}
+    return pd.DataFrame(payouts), pd.DataFrame(fails), pd.DataFrame(curve), state
+
+
+def render_mt5_funded(trades_all, risk_ea):
+    st.markdown("## 🏦 Simulare Conturi Funded")
+    st.caption("Fiecare cont ia TOATE trade-urile din raport (copy-trading). Mărimea poziției se scalează după "
+               f"riscul setat față de riscul EA-ului din raport ({risk_ea:g}% / trade), cu compunere în cadrul ciclului. "
+               "După fiecare payout contul revine la mărimea inițială.")
+    if trades_all.empty:
+        st.warning("Nu există trade-uri.")
+        return
+
+    # ── Perioada ──
+    st.markdown("### 📅 Perioada simulării")
+    t = trades_all.sort_values('Exit Time').copy()
+    dmin, dmax = t['Entry Time'].min().date(), t['Exit Time'].max().date()
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        mod_p = st.radio("Perioadă:", ["Tot raportul", "O singură lună", "Interval personalizat"], key="fd_mod_p")
+    with c2:
+        if mod_p == "O singură lună":
+            luni = t['Exit Time'].dt.to_period('M').drop_duplicates().astype(str).tolist()
+            luna = st.selectbox("Luna:", luni[::-1], key="fd_luna")
+            p = pd.Period(luna, 'M')
+            start, end = p.start_time.date(), p.end_time.date()
+        elif mod_p == "Interval personalizat":
+            rng = st.date_input("De la – până la:", (dmin, dmax), min_value=dmin, max_value=dmax, key="fd_rng")
+            start, end = (rng if isinstance(rng, (list, tuple)) and len(rng) == 2 else (dmin, dmax))
+        else:
+            start, end = dmin, dmax
+        st.markdown(f"<small style='color:#8b949e;'>Simulare: <b>{start:%d.%m.%Y}</b> → <b>{end:%d.%m.%Y}</b></small>",
+                    unsafe_allow_html=True)
+    t = t[(t['Entry Time'].dt.date >= start) & (t['Exit Time'].dt.date <= end)]
+    if t.empty:
+        st.warning("Nu există trade-uri în perioada aleasă.")
+        return
+    sim_t = t[['Entry Time', 'Exit Time', 'Return %']].rename(
+        columns={'Entry Time': 'Entry_Time', 'Exit Time': 'Exit_Time', 'Return %': 'Return_pct'})
+
+    # ── Conturi ──
+    st.markdown("### 🧾 Conturile tale funded")
+    st.caption("Adaugă / șterge rânduri cu ➕ / 🗑️. „Nr. conturi” = câte conturi identice ai cu aceleași reguli. "
+               "„Target payout” = profitul la care se cere payout imediat; „Min payout” = profitul minim ca să ceri la termen.")
+    if "fd_accounts" not in st.session_state:
+        st.session_state.fd_accounts = FUNDED_DEFAULT.copy()
+    acc_df = st.data_editor(
+        st.session_state.fd_accounts, num_rows="dynamic", use_container_width=True, hide_index=True, key="fd_editor",
+        column_config={
+            "Nume": st.column_config.TextColumn(required=True),
+            "Mărime ($)": st.column_config.NumberColumn(min_value=1000, step=1000, format="$%.0f", required=True),
+            "Nr. conturi": st.column_config.NumberColumn(min_value=1, max_value=50, step=1, required=True),
+            "Risc/trade (%)": st.column_config.NumberColumn(min_value=0.05, max_value=10.0, step=0.05, format="%.2f", required=True),
+            "Max DD (%)": st.column_config.NumberColumn(min_value=0.5, max_value=50.0, step=0.5, required=True),
+            "Daily DD (%)": st.column_config.NumberColumn(min_value=0.5, max_value=50.0, step=0.5, required=True),
+            "Target payout (%)": st.column_config.NumberColumn(min_value=0.1, max_value=100.0, step=0.5, required=True),
+            "Min payout (%)": st.column_config.NumberColumn(min_value=0.0, max_value=100.0, step=0.1, required=True),
+            "Zile payout": st.column_config.NumberColumn(min_value=1, max_value=90, step=1, required=True),
+            "Profit split (%)": st.column_config.NumberColumn(min_value=1.0, max_value=100.0, step=5.0, required=True),
+            "Cost cont ($)": st.column_config.NumberColumn(min_value=0.0, step=10.0, format="$%.0f"),
+        })
+    acc_df = acc_df.dropna(subset=["Nume", "Mărime ($)"]).copy()
+    defaults = FUNDED_DEFAULT.iloc[0].to_dict()
+    for col, v in defaults.items():
+        if col in acc_df.columns:
+            acc_df[col] = acc_df[col].fillna(v)
+    if acc_df.empty:
+        st.info("Adaugă cel puțin un cont.")
+        return
+
+    with st.expander("⚙️ Reguli generale", expanded=False):
+        c1, c2 = st.columns(2)
+        with c1:
+            dd_type = st.radio("Tip Max DD:", ["Static (din mărimea contului)", "Trailing (de la peak-ul balanței)"],
+                               key="fd_ddtype")
+            daily_base = st.radio("Daily DD calculat din:", ["Mărimea contului", "Balanța de la începutul zilei"],
+                                  key="fd_dailybase")
+        with c2:
+            target_early = st.checkbox("La atingerea target-ului se cere payout imediat (fără să aștepte termenul)",
+                                       value=True, key="fd_early")
+            cap_target = st.checkbox("Payout plafonat la target (excedentul nu se plătește)", value=False, key="fd_cap")
+            rebuy = st.checkbox("După fail, cumpăr un cont nou și continui", value=True, key="fd_rebuy")
+        st.caption("⚠️ Simularea folosește balanța la închiderea trade-urilor. Equity-ul intraday (pozițiile deschise) "
+                   "poate atinge limitele mai devreme — verifică Equity DD din „Raport MT5”.")
+    opts = {'dd_type': 'static' if dd_type.startswith('Static') else 'trailing',
+            'daily_base': 'cont' if daily_base.startswith('Mărimea') else 'zi',
+            'target_early': target_early, 'cap_target': cap_target, 'rebuy': rebuy}
+
+    # ── Simulare ──
+    all_pay, all_fail, curves, rows = [], [], {}, []
+    for _, acc in acc_df.iterrows():
+        n = int(acc["Nr. conturi"])
+        pay, fail, curve, state = simulate_funded_account(sim_t, acc, risk_ea, pd.Timestamp(start), opts)
+        name = str(acc["Nume"])
+        curves[name] = (curve, acc)
+        if not pay.empty:
+            pay.insert(0, 'Cont', name)
+            pay['Nr. conturi'] = n
+            pay['Total trader (toate copiile)'] = pay['Payout trader'] * n
+            all_pay.append(pay)
+        if not fail.empty:
+            fail.insert(0, 'Cont', name)
+            all_fail.append(fail)
+        npay = len(pay)
+        tot_trader = pay['Payout trader'].sum() if npay else 0.0
+        cost = state['Cost total']
+        rows.append({
+            'Cont': name, 'Nr.': n, 'Mărime': f"${acc['Mărime ($)']:,.0f}",
+            'Payout-uri': npay * n, 'Fail-uri': len(fail) * n,
+            'Rată succes': f"{npay / (npay + len(fail)) * 100:.0f}%" if (npay + len(fail)) else '—',
+            'Total trader / cont': f"${tot_trader:,.2f}",
+            'Total trader × Nr.': f"${tot_trader * n:,.2f}",
+            'Payout mediu': f"${pay['Payout trader'].mean():,.2f}" if npay else '—',
+            'Min / Max': f"${pay['Payout trader'].min():,.0f} / ${pay['Payout trader'].max():,.0f}" if npay else '—',
+            'Zile medii / payout': f"{pay['Zile ciclu'].mean():.1f}" if npay else '—',
+            'Cost conturi': f"${cost * n:,.0f}",
+            'Net după cost': f"${(tot_trader - cost) * n:,.2f}",
+            'Status final': (f"✅ activ, profit neîncasat ${state['Profit neîncasat']:,.0f} "
+                             f"({state['Zile ciclu curent']} zile)") if state['Activ'] else "❌ pierdut",
+            '_net': (tot_trader - cost) * n, '_trader': tot_trader * n, '_cost': cost * n,
+            '_fails': len(fail) * n,
+        })
+    pay_df = pd.concat(all_pay, ignore_index=True) if all_pay else pd.DataFrame()
+    fail_df = pd.concat(all_fail, ignore_index=True) if all_fail else pd.DataFrame()
+    summ = pd.DataFrame(rows)
+
+    # ── KPI ──
+    st.markdown("### 📊 Rezumat payout-uri")
+    days_period = max((pd.Timestamp(end) - pd.Timestamp(start)).days + 1, 1)
+    months = days_period / 30.44
+    total_trader = summ['_trader'].sum()
+    total_cost = summ['_cost'].sum()
+    n_pay_total = int((pay_df['Nr. conturi']).sum()) if not pay_df.empty else 0
+    n_fail_total = int(summ['_fails'].sum())
+    _cards_row([
+        ("Payout-uri (toate conturile)", f"{n_pay_total}", '#00cf8d',
+         f"{len(pay_df)} cicluri × nr. conturi identice" if not pay_df.empty else 'niciun payout'),
+        ("Total încasat (trader)", _fmt_money(total_trader), '#00cf8d', f"în {days_period} zile"),
+        ("Venit mediu / lună", _fmt_money(total_trader / months if months else 0), '#58a6ff',
+         f"net după costuri: {_fmt_money((total_trader - total_cost) / months if months else 0)}"),
+        ("Fail-uri", f"{n_fail_total}", '#ff4b4b' if n_fail_total else '#00cf8d',
+         f"cost conturi: {_fmt_money(total_cost)}"),
+    ])
+    if not pay_df.empty:
+        pt = pay_df['Payout trader']
+        first = pay_df.sort_values('Data payout').iloc[0]
+        gaps = pay_df.sort_values('Data payout').groupby('Cont')['Data payout'].diff().dt.days.dropna()
+        _cards_row([
+            ("Payout mediu / cont", _fmt_money(pt.mean()), '#e6edf3', f"median {_fmt_money(pt.median())}"),
+            ("Cel mai mare / mic", f"{_fmt_money(pt.max())} / {_fmt_money(pt.min())}", '#e6edf3'),
+            ("Primul payout", f"{(first['Data payout'] - pd.Timestamp(start)).days} zile",
+             '#58a6ff', f"{first['Data payout']:%d.%m.%Y} ({first['Cont']})"),
+            ("Zile între payout-uri", f"{gaps.mean():.1f}" if len(gaps) else f"{pay_df['Zile ciclu'].mean():.1f}",
+             '#58a6ff', f"max pauză: {gaps.max():.0f} zile" if len(gaps) else ''),
+        ])
+        by_reason = pay_df['Motiv'].value_counts()
+        _cards_row([
+            ("Prin target atins", f"{by_reason.get('Target atins', 0)}", '#00cf8d',
+             f"{by_reason.get('Target atins', 0) / len(pay_df) * 100:.0f}% din cicluri"),
+            ("Prin termen", f"{len(pay_df) - by_reason.get('Target atins', 0)}", '#58a6ff', "profit sub target la termen"),
+            ("Trade-uri medii / payout", f"{pay_df['Trade-uri'].mean():.1f}", '#e6edf3'),
+            ("Buffer DD folosit (max)", f"{pay_df['Buffer DD folosit %'].max():.0f}%",
+             '#ff4b4b' if pay_df['Buffer DD folosit %'].max() > 70 else '#00cf8d',
+             f"mediu {pay_df['Buffer DD folosit %'].mean():.0f}% din Max DD"),
+        ])
+
+    st.markdown("#### Pe fiecare cont")
+    st.dataframe(summ.drop(columns=['_net', '_trader', '_cost', '_fails']), use_container_width=True, hide_index=True)
+
+    if pay_df.empty:
+        st.info("Niciun payout în perioada aleasă — încearcă o perioadă mai lungă, un target mai mic sau mai puține zile.")
+    else:
+        # ── Grafice ──
+        st.markdown("### 📈 Payout-urile în timp")
+        pdv = pay_df.sort_values('Data payout').copy()
+        fig = px.bar(pdv, x='Data payout', y='Total trader (toate copiile)', color='Cont',
+                     hover_data={'Payout trader': ':,.2f', 'Profit %': ':.2f', 'Zile ciclu': True, 'Motiv': True},
+                     title='Fiecare payout (suma încasată de tine)')
+        st.plotly_chart(_dark(fig, 360), use_container_width=True)
+
+        cum = pdv[['Data payout', 'Total trader (toate copiile)']].copy()
+        cum['Cumulat'] = cum['Total trader (toate copiile)'].cumsum()
+        fig_c = go.Figure(go.Scatter(x=cum['Data payout'], y=cum['Cumulat'], mode='lines+markers',
+                                     line=dict(color='#00cf8d', width=2), name='Încasat cumulat'))
+        if total_cost > 0:
+            fig_c.add_hline(y=total_cost, line_dash='dash', line_color='#ff4b4b', annotation_text='Cost conturi')
+        fig_c.update_layout(title='Bani încasați cumulat', yaxis_title='USD')
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(_dark(fig_c, 340), use_container_width=True)
+        with c2:
+            fig_h = px.histogram(pdv, x='Payout trader', color='Cont', nbins=20, title='Distribuția mărimii payout-urilor')
+            st.plotly_chart(_dark(fig_h, 340), use_container_width=True)
+
+        st.markdown("### 🗓️ Payout-uri pe lună")
+        pdv['Luna'] = pdv['Data payout'].dt.to_period('M').astype(str)
+        lun = pdv.groupby('Luna').agg(Payouts=('Nr. conturi', 'sum'),
+                                      Total=('Total trader (toate copiile)', 'sum'),
+                                      Mediu=('Payout trader', 'mean')).reset_index()
+        all_m = pd.period_range(start, end, freq='M').astype(str)
+        lun = pd.DataFrame({'Luna': all_m}).merge(lun, on='Luna', how='left').fillna(0)
+        if not fail_df.empty:
+            fm = fail_df.assign(Luna=fail_df['Data fail'].dt.to_period('M').astype(str)).groupby('Luna').size()
+            lun['Fail-uri'] = lun['Luna'].map(fm).fillna(0).astype(int)
+        else:
+            lun['Fail-uri'] = 0
+        fig_m = px.bar(lun, x='Luna', y='Total', text=lun['Payouts'].map(lambda v: f"{int(v)} payout"),
+                       title='Total încasat pe lună', color_discrete_sequence=['#00cf8d'])
+        st.plotly_chart(_dark(fig_m, 340), use_container_width=True)
+        luni_cu = (lun['Total'] > 0).sum()
+        st.caption(f"Luni cu cel puțin un payout: {luni_cu}/{len(lun)} • "
+                   f"lună medie: {_fmt_money(lun['Total'].mean())} • cea mai slabă: {_fmt_money(lun['Total'].min())} • "
+                   f"cea mai bună: {_fmt_money(lun['Total'].max())}")
+        lun_show = lun.copy()
+        lun_show['Total'] = lun_show['Total'].map(lambda v: f"${v:,.2f}")
+        lun_show['Mediu'] = lun_show['Mediu'].map(lambda v: f"${v:,.2f}" if v else '—')
+        lun_show['Payouts'] = lun_show['Payouts'].astype(int)
+        with st.expander("Tabel lunar", expanded=False):
+            st.dataframe(lun_show, use_container_width=True, hide_index=True)
+
+        st.markdown("### 📋 Lista completă a payout-urilor")
+        show = pdv.copy()
+        for c in ['Ciclu început', 'Data payout']:
+            show[c] = show[c].dt.strftime('%d.%m.%Y %H:%M')
+        for c in ['Profit brut', 'Payout trader', 'Partea firmei', 'Total trader (toate copiile)']:
+            show[c] = show[c].map(lambda v: f"${v:,.2f}")
+        for c in ['Profit %', 'Min balanță ciclu %', 'Cea mai proastă zi %', 'Buffer DD folosit %']:
+            show[c] = show[c].map(lambda v: f"{v:.2f}%")
+        show = show.drop(columns=['Luna'])
+        st.dataframe(show, use_container_width=True, hide_index=True)
+        st.download_button("⬇️ Export payout-uri CSV", pdv.drop(columns=['Luna']).to_csv(index=False),
+                           file_name="payouts_funded.csv", mime="text/csv", key="fd_dl")
+
+    if not fail_df.empty:
+        st.markdown("### ❌ Conturi pierdute")
+        fs = fail_df.copy()
+        for c in ['Data fail', 'Ciclu început']:
+            fs[c] = fs[c].dt.strftime('%d.%m.%Y %H:%M')
+        for c in ['Balanță la fail', 'Pierdere vs mărime']:
+            fs[c] = fs[c].map(lambda v: f"${v:,.2f}")
+        st.dataframe(fs, use_container_width=True, hide_index=True)
+
+    # ── Curba unui cont ──
+    st.markdown("### 🔍 Evoluția unui cont")
+    pick = st.selectbox("Cont:", list(curves.keys()), key="fd_pick")
+    curve, acc = curves[pick]
+    if not curve.empty:
+        size = float(acc["Mărime ($)"])
+        fig_a = go.Figure(go.Scatter(x=curve['Time'], y=curve['Balance'], mode='lines',
+                                     line=dict(color='#58a6ff', width=1.5), name='Balanță'))
+        pe = curve[curve['Event'] == 'PAYOUT']
+        fe = curve[curve['Event'].str.startswith('FAIL')]
+        if not pay_df.empty:
+            pp = pay_df[pay_df['Cont'] == pick]
+            fig_a.add_trace(go.Scatter(x=pp['Data payout'], y=size + pp['Profit brut'], mode='markers',
+                                       marker=dict(symbol='triangle-up', size=11, color='#00cf8d'),
+                                       name='Payout', text=pp['Payout trader'].map(lambda v: f"Payout ${v:,.0f}"),
+                                       hoverinfo='text+x'))
+        if not fe.empty:
+            fig_a.add_trace(go.Scatter(x=fe['Time'], y=fe['Balance'], mode='markers', name='Fail',
+                                       marker=dict(symbol='x', size=12, color='#ff4b4b'), text=fe['Event'],
+                                       hoverinfo='text+x'))
+        fig_a.add_hline(y=size * (1 + float(acc['Target payout (%)']) / 100), line_dash='dot',
+                        line_color='#00cf8d', annotation_text='Target payout')
+        if opts['dd_type'] == 'static':
+            fig_a.add_hline(y=size * (1 - float(acc['Max DD (%)']) / 100), line_dash='dash',
+                            line_color='#ff4b4b', annotation_text='Max DD')
+        fig_a.add_hline(y=size, line_color='#8b949e', line_width=1)
+        fig_a.update_layout(title=f"{pick} — balanța resetată după fiecare payout", yaxis_title='USD')
+        st.plotly_chart(_dark(fig_a, 420), use_container_width=True)
+
+
+# ══════════════════════════════════════════════════════════════
 # PAGINA MT5 — PUNCT DE INTRARE
 # ══════════════════════════════════════════════════════════════
 def render_mt5_page(render_full_analysis, render_risk_management, render_monte_carlo,
@@ -809,9 +1181,10 @@ def render_mt5_page(render_full_analysis, render_risk_management, render_monte_c
                            mime="text/csv", key="mt5_dl_csv")
     st.caption("🕒 Orele sunt ora serverului brokerului (MT5), nu ora României.")
 
-    t_rep, t_bal, t_set, t_next, t_glob, t_risk, t_mc, t_adv = st.tabs([
-        "📋 Raport MT5", "📈 Balanță & Randament", "🎯 Setup-uri & Execuție", "🔮 Next Trade (Win/Loss)",
-        "🌍 Analiză Completă", "💰 Risk Management", "🎲 Monte Carlo", "🔬 Analize Avansate"])
+    t_glob, t_rep, t_bal, t_set, t_next, t_fund, t_risk, t_mc, t_adv = st.tabs([
+        "🌍 Analiză Completă", "📋 Raport MT5", "📈 Balanță & Randament", "🎯 Setup-uri & Execuție",
+        "🔮 Next Trade (Win/Loss)", "🏦 Conturi Funded", "💰 Risk Management", "🎲 Monte Carlo",
+        "🔬 Analize Avansate"])
     with t_rep:
         render_mt5_official(rep, trades)
     with t_bal:
@@ -825,6 +1198,15 @@ def render_mt5_page(render_full_analysis, render_risk_management, render_monte_c
             st.info("Funcția de probabilități nu este disponibilă.")
     with t_glob:
         render_full_analysis(df, "MT5", [])
+    with t_fund:
+        try:
+            risk_ea = float(str(rep['inputs_dict'].get('InpRiskPct', '')).replace(',', '.'))
+        except ValueError:
+            risk_ea = None
+        if not risk_ea:
+            l = trades.loc[trades['Result'] == 'Loss', 'Return %']
+            risk_ea = round(abs(l.median()), 2) if len(l) else 1.0
+        render_mt5_funded(trades[trades['Signal'].isin(sel_s)], risk_ea)
     with t_risk:
         render_risk_management(df)
     with t_mc:
