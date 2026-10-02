@@ -674,11 +674,86 @@ def render_mt5_setups(df, orders):
             st.caption(f"📌 {len(mkt)} intrări la market (fallback), în afara ordinelor pending.")
 
 
+
+# ══════════════════════════════════════════════════════════════
+# TAB — PROBABILITATE TRADE URMĂTOR (Win / Loss după șir)
+# ══════════════════════════════════════════════════════════════
+def render_mt5_next_trade(df, get_streak_probabilities):
+    st.markdown("## 🔮 Probabilitatea ca următorul trade să fie Win / Loss")
+    st.caption("Pentru fiecare șir de rezultate (ex. 2 Win la rând) se numără ce a urmat istoric. "
+               "„Eșantion” = de câte ori a apărut situația respectivă în date.")
+    if df.empty:
+        st.warning("Nu există trade-uri pentru filtrele selectate.")
+        return
+
+    setups = sorted(df['Signal'].unique())
+    opt = ["Toate trade-urile"] + [f"Doar {s}" for s in setups] if len(setups) > 1 else ["Toate trade-urile"]
+    alegere = st.radio("Calculează pe:", opt, horizontal=True, key="mt5_next_scope")
+    d = df if alegere == "Toate trade-urile" else df[df['Signal'] == alegere.replace("Doar ", "", 1)]
+    d = d.sort_values('Entry Time')
+    if len(d) < 3:
+        st.warning("Prea puține trade-uri pentru calcul.")
+        return
+
+    df_win, df_loss, active_label = get_streak_probabilities(d)
+    base_wr = (d['Result'] == 'Win').mean() * 100
+
+    # ── Situația curentă → predicție pentru trade-ul următor ──
+    tabel = df_win if 'Win' in active_label else df_loss
+    rand = tabel[tabel['Șir curent'] == active_label] if not tabel.empty else tabel
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        _card("Șir activ acum", active_label, '#00cf8d' if 'Win' in active_label else '#ff4b4b',
+              f"ultimul trade: {d['Exit Time'].iloc[-1]:%d.%m.%Y %H:%M}")
+    if not rand.empty:
+        r = rand.iloc[0]
+        p_win = float(str(r['Probabilitate Win Următor']).rstrip('%'))
+        n = int(str(r['Eșantion']).split()[0])
+        with c2:
+            _card("Probabilitate WIN următor", f"{p_win:.1f}%", '#00cf8d' if p_win >= base_wr else '#ff9f43',
+                  f"vs. win rate general {base_wr:.1f}%")
+        with c3:
+            _card("Probabilitate LOSS următor", f"{100 - p_win:.1f}%", '#ff4b4b')
+        with c4:
+            _card("Eșantion", f"{n} ori", '#00cf8d' if n >= 30 else ('#ff9f43' if n >= 10 else '#ff4b4b'),
+                  "solid" if n >= 30 else ("orientativ" if n >= 10 else "prea mic — nu te baza"))
+    else:
+        with c2:
+            _card("Probabilitate WIN următor", "—", '#8b949e',
+                  "șirul activ nu a mai apărut până acum")
+        with c3:
+            _card("Win rate general", f"{base_wr:.1f}%", '#58a6ff')
+    st.write("")
+
+    # ── Tabelele (același format ca la TradingView) ──
+    def style_streak_row(row):
+        if row['Șir curent'] == active_label:
+            color = '#00cf8d' if 'Win' in active_label else '#cf0000'
+            return [f'background-color: {color}; color: white; font-weight: bold'] * len(row)
+        return [''] * len(row)
+
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+        st.markdown("#### 🟢 După un șir de WIN-uri")
+        if not df_win.empty:
+            st.table(df_win.style.apply(style_streak_row, axis=1))
+        else:
+            st.info("Nu există date.")
+    with col_p2:
+        st.markdown("#### 🔴 După un șir de LOSS-uri")
+        if not df_loss.empty:
+            st.table(df_loss.style.apply(style_streak_row, axis=1))
+        else:
+            st.info("Nu există date.")
+    st.caption(f"Rândul colorat = situația în care te afli acum. Win rate-ul de bază pe selecția curentă este "
+               f"{base_wr:.1f}% — o probabilitate peste el înseamnă că după acel șir rezultatele au fost mai bune decât media. "
+               f"Rândurile cu eșantion sub 10 sunt statistic nesigure.")
+
 # ══════════════════════════════════════════════════════════════
 # PAGINA MT5 — PUNCT DE INTRARE
 # ══════════════════════════════════════════════════════════════
 def render_mt5_page(render_full_analysis, render_risk_management, render_monte_carlo,
-                    render_advanced_analysis, generate_pdf=None):
+                    render_advanced_analysis, generate_pdf=None, get_streak_probabilities=None):
     st.markdown("<h3 style='text-align:center;'>🤖 Analiză MetaTrader 5</h3>", unsafe_allow_html=True)
     st.markdown("<p style='text-align:center; color:#8b949e;'>Încarcă raportul exportat din MT5 "
                 "(Strategy Tester → tab Backtest → click dreapta → <b>Report → Excel/XML</b>, "
@@ -734,8 +809,8 @@ def render_mt5_page(render_full_analysis, render_risk_management, render_monte_c
                            mime="text/csv", key="mt5_dl_csv")
     st.caption("🕒 Orele sunt ora serverului brokerului (MT5), nu ora României.")
 
-    t_rep, t_bal, t_set, t_glob, t_risk, t_mc, t_adv = st.tabs([
-        "📋 Raport MT5", "📈 Balanță & Randament", "🎯 Setup-uri & Execuție",
+    t_rep, t_bal, t_set, t_next, t_glob, t_risk, t_mc, t_adv = st.tabs([
+        "📋 Raport MT5", "📈 Balanță & Randament", "🎯 Setup-uri & Execuție", "🔮 Next Trade (Win/Loss)",
         "🌍 Analiză Completă", "💰 Risk Management", "🎲 Monte Carlo", "🔬 Analize Avansate"])
     with t_rep:
         render_mt5_official(rep, trades)
@@ -743,6 +818,11 @@ def render_mt5_page(render_full_analysis, render_risk_management, render_monte_c
         render_mt5_balance(df, rep['deposit'], is_filtered)
     with t_set:
         render_mt5_setups(df, rep['orders'])
+    with t_next:
+        if get_streak_probabilities is not None:
+            render_mt5_next_trade(df, get_streak_probabilities)
+        else:
+            st.info("Funcția de probabilități nu este disponibilă.")
     with t_glob:
         render_full_analysis(df, "MT5", [])
     with t_risk:

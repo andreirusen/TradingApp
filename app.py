@@ -2153,6 +2153,7 @@ if sursa_date.startswith("🤖"):
     render_mt5_page(
         render_full_analysis, render_risk_management, render_monte_carlo,
         render_advanced_analysis, generate_full_pdf_report,
+        get_streak_probabilities=get_streak_probabilities,
     )
     st.stop()
 
