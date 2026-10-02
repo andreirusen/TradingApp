@@ -571,14 +571,14 @@ def render_mt5_balance(df, deposit, is_filtered):
 # ══════════════════════════════════════════════════════════════
 # TAB 3 — SETUP-URI, IEȘIRI, EXECUȚIE
 # ══════════════════════════════════════════════════════════════
-def render_mt5_setups(df, orders):
+def render_mt5_setups(df, orders, setup_label="comentariu EA", volume_label="loturi"):
     st.markdown("## 🎯 Setup-uri, Ieșiri & Execuție")
     if df.empty:
         st.warning("Nu există trade-uri pentru filtrele selectate.")
         return
 
     # ── Pe setup (comentariul ordinului de intrare) ──
-    st.markdown("### 🧩 Performanță pe setup (comentariu EA)")
+    st.markdown(f"### 🧩 Performanță pe setup ({setup_label})")
     g = _group_stats(df, ['Signal', 'Direction'])
     fig = px.bar(g, x='Signal', y='Profit', color='Direction', text=g['WR %'].map(lambda v: f"WR {v:.0f}%"),
                  color_discrete_map={'Long': '#00cf8d', 'Short': '#ff9f43'}, title='Profit net pe setup')
@@ -594,6 +594,9 @@ def render_mt5_setups(df, orders):
                  use_container_width=True, hide_index=True)
 
     # ── Motiv ieșire ──
+    has_exit = 'Exit Reason' in df.columns and df['Exit Reason'].nunique() > 0 and not (df['Exit Reason'] == 'N/A').all()
+    if not has_exit:
+        df = df.assign(**{'Exit Reason': 'N/A'})
     st.markdown("### 🚪 Cum se închid trade-urile")
     c1, c2 = st.columns(2)
     er = _group_stats(df, 'Exit Reason')
@@ -617,6 +620,8 @@ def render_mt5_setups(df, orders):
 
     # ── Rentabilitate % per trade (risc real pe cont) ──
     st.markdown("### 📐 Rezultat per trade în % din balanță")
+    if 'Return %' not in df.columns:
+        df = df.assign(**{'Return %': np.nan})
     c1, c2 = st.columns([2, 1])
     with c1:
         fig_r = px.histogram(df, x='Return %', color='Result', nbins=60, barmode='overlay',
@@ -635,8 +640,12 @@ def render_mt5_setups(df, orders):
     st.markdown("### ⏱️ Puncte & durată")
     c1, c2 = st.columns(2)
     with c1:
-        fig_p = px.box(df, x='Direction', y='Points', color='Result', points=False,
-                       color_discrete_map={'Win': '#00cf8d', 'Loss': '#ff4b4b'}, title='Puncte câștigate/pierdute')
+        if 'Points' in df.columns and df['Points'].notna().any():
+            fig_p = px.box(df, x='Direction', y='Points', color='Result', points=False,
+                           color_discrete_map={'Win': '#00cf8d', 'Loss': '#ff4b4b'}, title='Puncte câștigate/pierdute')
+        else:
+            fig_p = px.box(df, x='Direction', y='Net P&L USD', color='Result', points=False,
+                           color_discrete_map={'Win': '#00cf8d', 'Loss': '#ff4b4b'}, title='P&L ($) câștigat/pierdut')
         st.plotly_chart(_dark(fig_p, 340), use_container_width=True)
     with c2:
         fig_d = px.box(df, x='Exit Reason', y='Duration_Min', color='Direction', points=False,
@@ -644,10 +653,11 @@ def render_mt5_setups(df, orders):
         st.plotly_chart(_dark(fig_d, 340), use_container_width=True)
 
     # ── Lot size în timp ──
-    fig_v = px.scatter(df, x='Entry Time', y='Volume', color='Direction', opacity=0.7,
-                       color_discrete_map={'Long': '#00cf8d', 'Short': '#ff9f43'},
-                       title='Volum (loturi) pe trade — position sizing în timp')
-    st.plotly_chart(_dark(fig_v, 300), use_container_width=True)
+    if 'Volume' in df.columns and df['Volume'].notna().any() and df['Volume'].nunique() > 1:
+        fig_v = px.scatter(df, x='Entry Time', y='Volume', color='Direction', opacity=0.7,
+                           color_discrete_map={'Long': '#00cf8d', 'Short': '#ff9f43'},
+                           title=f'Volum ({volume_label}) pe trade — position sizing în timp')
+        st.plotly_chart(_dark(fig_v, 300), use_container_width=True)
 
     # ── Execuție ordine pending ──
     if orders is not None and not orders.empty and 'State' in orders.columns and 'Type' in orders.columns:
@@ -759,6 +769,13 @@ FUNDED_DEFAULT = pd.DataFrame([{
 }])
 
 
+FUNDED_DEFAULT_ABS = pd.DataFrame([{
+    "Nume": "Cont 1", "Mărime ($)": 50000.0, "Nr. conturi": 1, "Multiplicator (×)": 1.0,
+    "Max DD (%)": 10.0, "Daily DD (%)": 5.0, "Target payout (%)": 5.0, "Min payout (%)": 1.0,
+    "Zile payout": 14, "Profit split (%)": 80.0, "Cost cont ($)": 0.0,
+}])
+
+
 def simulate_funded_account(trades, acc, risk_ea, period_start, opts):
     """Simulează UN cont funded pe trade-urile date (ordonate după Exit Time).
     P&L-ul fiecărui trade = Return % al trade-ului MT5 × (risc cont / risc EA) × balanța curentă.
@@ -772,7 +789,11 @@ def simulate_funded_account(trades, acc, risk_ea, period_start, opts):
     n_days = int(acc["Zile payout"])
     split = float(acc["Profit split (%)"]) / 100
     fee = float(acc["Cost cont ($)"])
-    scale = float(acc["Risc/trade (%)"]) / risk_ea if risk_ea else 1.0
+    abs_mode = opts.get('mode') == 'abs'
+    if abs_mode:
+        scale = float(acc.get("Multiplicator (×)", 1.0) or 1.0)
+    else:
+        scale = float(acc["Risc/trade (%)"]) / risk_ea if risk_ea else 1.0
 
     payouts, fails, curve, instances = [], [], [], []
     instance, active = 1, True
@@ -807,7 +828,7 @@ def simulate_funded_account(trades, acc, risk_ea, period_start, opts):
         if ex.date() != day:
             day, day_start, day_trades = ex.date(), bal, 0
         bal_before = bal
-        pnl = bal * (tr['Return_pct'] / 100.0) * scale
+        pnl = tr['PnL_abs'] * scale if abs_mode else bal * (tr['Return_pct'] / 100.0) * scale
         bal += pnl
         cyc_trades += 1
         day_trades += 1
@@ -885,11 +906,18 @@ def simulate_funded_account(trades, acc, risk_ea, period_start, opts):
     return pd.DataFrame(payouts), pd.DataFrame(fails), pd.DataFrame(curve), state, pd.DataFrame(instances)
 
 
-def render_mt5_funded(trades_all, risk_ea):
+def render_mt5_funded(trades_all, risk_ea=1.0, mode='pct'):
+    """mode='pct' (MT5): P&L = Return % × balanță × (risc cont / risc EA)
+       mode='abs' (TradingView): P&L = Net P&L USD × multiplicator (contracte fixe, fără compunere)"""
     st.markdown("## 🏦 Simulare Conturi Funded")
-    st.caption("Fiecare cont ia TOATE trade-urile din raport (copy-trading). Mărimea poziției se scalează după "
-               f"riscul setat față de riscul EA-ului din raport ({risk_ea:g}% / trade), cu compunere în cadrul ciclului. "
-               "După fiecare payout contul revine la mărimea inițială.")
+    if mode == 'abs':
+        st.caption("Fiecare cont ia TOATE trade-urile din fișier (copy-trading). P&L-ul fiecărui trade e cel din "
+                   "TradingView × „Multiplicator” (ex. 2 = dublul contractelor). Fără compunere — contracte fixe. "
+                   "După fiecare payout contul revine la mărimea inițială.")
+    else:
+        st.caption("Fiecare cont ia TOATE trade-urile din raport (copy-trading). Mărimea poziției se scalează după "
+                   f"riscul setat față de riscul EA-ului din raport ({risk_ea:g}% / trade), cu compunere în cadrul ciclului. "
+                   "După fiecare payout contul revine la mărimea inițială.")
     if trades_all.empty:
         st.warning("Nu există trade-uri.")
         return
@@ -918,22 +946,35 @@ def render_mt5_funded(trades_all, risk_ea):
     if t.empty:
         st.warning("Nu există trade-uri în perioada aleasă.")
         return
-    sim_t = t[['Entry Time', 'Exit Time', 'Return %', 'Trade #', 'Direction', 'Signal']].rename(
-        columns={'Entry Time': 'Entry_Time', 'Exit Time': 'Exit_Time', 'Return %': 'Return_pct', 'Trade #': 'Trade_no'})
+    if 'Return %' not in t.columns:
+        t['Return %'] = np.nan
+    if 'Signal' not in t.columns:
+        t['Signal'] = ''
+    sim_t = t[['Entry Time', 'Exit Time', 'Return %', 'Net P&L USD', 'Trade #', 'Direction', 'Signal']].rename(
+        columns={'Entry Time': 'Entry_Time', 'Exit Time': 'Exit_Time', 'Return %': 'Return_pct',
+                 'Net P&L USD': 'PnL_abs', 'Trade #': 'Trade_no'})
 
     # ── Conturi ──
     st.markdown("### 🧾 Conturile tale funded")
     st.caption("Adaugă / șterge rânduri cu ➕ / 🗑️. „Nr. conturi” = câte conturi identice ai cu aceleași reguli. "
                "„Target payout” = profitul la care se cere payout imediat; „Min payout” = profitul minim ca să ceri la termen.")
-    if "fd_accounts" not in st.session_state:
-        st.session_state.fd_accounts = FUNDED_DEFAULT.copy()
+    base_default = FUNDED_DEFAULT_ABS if mode == 'abs' else FUNDED_DEFAULT
+    ss_key = f"fd_accounts_{mode}"
+    if ss_key not in st.session_state:
+        st.session_state[ss_key] = base_default.copy()
+    scale_cfg = ({"Multiplicator (×)": st.column_config.NumberColumn(min_value=0.1, max_value=100.0, step=0.5,
+                                                                    format="%.2f", required=True)}
+                 if mode == 'abs' else
+                 {"Risc/trade (%)": st.column_config.NumberColumn(min_value=0.05, max_value=10.0, step=0.05,
+                                                                  format="%.2f", required=True)})
     acc_df = st.data_editor(
-        st.session_state.fd_accounts, num_rows="dynamic", use_container_width=True, hide_index=True, key="fd_editor",
+        st.session_state[ss_key], num_rows="dynamic", use_container_width=True, hide_index=True,
+        key=f"fd_editor_{mode}",
         column_config={
             "Nume": st.column_config.TextColumn(required=True),
             "Mărime ($)": st.column_config.NumberColumn(min_value=1000, step=1000, format="$%.0f", required=True),
             "Nr. conturi": st.column_config.NumberColumn(min_value=1, max_value=50, step=1, required=True),
-            "Risc/trade (%)": st.column_config.NumberColumn(min_value=0.05, max_value=10.0, step=0.05, format="%.2f", required=True),
+            **scale_cfg,
             "Max DD (%)": st.column_config.NumberColumn(min_value=0.5, max_value=50.0, step=0.5, required=True),
             "Daily DD (%)": st.column_config.NumberColumn(min_value=0.5, max_value=50.0, step=0.5, required=True),
             "Target payout (%)": st.column_config.NumberColumn(min_value=0.1, max_value=100.0, step=0.5, required=True),
@@ -943,7 +984,7 @@ def render_mt5_funded(trades_all, risk_ea):
             "Cost cont ($)": st.column_config.NumberColumn(min_value=0.0, step=10.0, format="$%.0f"),
         })
     acc_df = acc_df.dropna(subset=["Nume", "Mărime ($)"]).copy()
-    defaults = FUNDED_DEFAULT.iloc[0].to_dict()
+    defaults = base_default.iloc[0].to_dict()
     for col, v in defaults.items():
         if col in acc_df.columns:
             acc_df[col] = acc_df[col].fillna(v)
@@ -967,7 +1008,7 @@ def render_mt5_funded(trades_all, risk_ea):
                    "poate atinge limitele mai devreme — verifică Equity DD din „Raport MT5”.")
     opts = {'dd_type': 'static' if dd_type.startswith('Static') else 'trailing',
             'daily_base': 'cont' if daily_base.startswith('Mărimea') else 'zi',
-            'target_early': target_early, 'cap_target': cap_target, 'rebuy': rebuy}
+            'target_early': target_early, 'cap_target': cap_target, 'rebuy': rebuy, 'mode': mode}
 
     # ── Simulare ──
     all_pay, all_fail, all_inst, curves, rows = [], [], [], {}, []
@@ -1219,6 +1260,32 @@ def render_mt5_funded(trades_all, risk_ea):
 
 
 # ══════════════════════════════════════════════════════════════
+# TRADINGVIEW — pregătire date pentru aceleași analize
+# ══════════════════════════════════════════════════════════════
+def prepare_tv_df(df, deposit):
+    """Primește df-ul TradingView din app.py și adaugă coloanele folosite de analizele MT5:
+    Signal (= semnalul de INTRARE), Exit Reason (= semnalul de ieșire), Balance After / Before, Return %, Points."""
+    d = df.copy().sort_values('Exit Time')
+    if d.empty:
+        return d
+
+    def _clean(col):
+        return (d[col].astype(str).str.strip().replace({'nan': 'N/A', '': 'N/A', 'None': 'N/A'})
+                if col in d.columns else pd.Series('N/A', index=d.index))
+    d['Signal'] = _clean('Entry Signal') if 'Entry Signal' in d.columns else _clean('Signal')
+    d['Exit Reason'] = _clean('Exit Signal')
+    bal = deposit + d['Net P&L USD'].cumsum()
+    d['Balance After'] = bal
+    d['Balance Before'] = bal - d['Net P&L USD']
+    d['Return %'] = np.where(d['Balance Before'] > 0, d['Net P&L USD'] / d['Balance Before'] * 100, np.nan)
+    if 'Entry Price' in d.columns and 'Exit Price' in d.columns:
+        sign = np.where(d['Direction'] == 'Short', -1, 1)
+        d['Points'] = (pd.to_numeric(d['Exit Price'], errors='coerce') -
+                       pd.to_numeric(d['Entry Price'], errors='coerce')) * sign
+    return d
+
+
+# ══════════════════════════════════════════════════════════════
 # PAGINA MT5 — PUNCT DE INTRARE
 # ══════════════════════════════════════════════════════════════
 def render_mt5_page(render_full_analysis, render_risk_management, render_monte_carlo,
@@ -1303,7 +1370,7 @@ def render_mt5_page(render_full_analysis, render_risk_management, render_monte_c
         if not risk_ea:
             l = trades.loc[trades['Result'] == 'Loss', 'Return %']
             risk_ea = round(abs(l.median()), 2) if len(l) else 1.0
-        render_mt5_funded(trades[trades['Signal'].isin(sel_s)], risk_ea)
+        render_mt5_funded(trades[trades['Signal'].isin(sel_s)], risk_ea, mode='pct')
     with t_risk:
         render_risk_management(df)
     with t_mc:

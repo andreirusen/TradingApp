@@ -16,8 +16,7 @@ import plotly.graph_objects as go
 # PDF import
 from pdf_report import generate_full_pdf_report
 # MT5 import
-from mt5_analysis import (render_mt5_page, is_mt5_report, prepare_tv_df,
-                          render_mt5_balance, render_mt5_setups, render_mt5_next_trade, render_mt5_funded)
+from mt5_analysis import render_mt5_page, is_mt5_report
 
 # 2. CONFIGURARE PAGINĂ ȘI DESIGN
 st.set_page_config(page_title="TradingView Payout & Strategy", page_icon="logo-lvlup.png", layout="wide")
@@ -2195,17 +2194,7 @@ if uploaded_file:
         df_entries['Entry Time'] = pd.to_datetime(df_entries['Date and time'])
         df_exits['Exit Time']    = pd.to_datetime(df_exits['Date and time'])
 
-        # Coloane opționale TradingView: preț și cantitate
-        _price_col = next((c for c in ['Price USD', 'Price', 'Price, USD'] if c in df_raw.columns), None)
-        _qty_col = next((c for c in ['Contracts', 'Quantity', 'Qty', 'Position size (qty)', 'Size (qty)',
-                                     'Position size'] if c in df_raw.columns), None)
-        _ent = df_entries[['Trade #', 'Entry Time', 'Type']].copy()
-        if 'Signal' in df_entries.columns:
-            _ent['Entry Signal'] = df_entries['Signal'].values
-        if _price_col:
-            _ent['Entry Price'] = pd.to_numeric(df_entries[_price_col], errors='coerce').values
-
-        df_combined = pd.merge(df_exits, _ent, on='Trade #', how='left')
+        df_combined = pd.merge(df_exits, df_entries[['Trade #', 'Entry Time', 'Type']], on='Trade #', how='left')
         df_combined = df_combined.drop_duplicates(subset='Trade #', keep='first')
         df_combined['Entry Time'] = df_combined['Entry Time'].fillna(df_combined['Exit Time'])
 
@@ -2240,11 +2229,6 @@ if uploaded_file:
 
         if 'Signal' not in df_combined.columns:
             df_combined['Signal'] = 'N/A'
-        df_combined['Exit Signal'] = df_combined['Signal']
-        if _price_col and _price_col in df_combined.columns:
-            df_combined['Exit Price'] = pd.to_numeric(df_combined[_price_col], errors='coerce')
-        if _qty_col and _qty_col in df_combined.columns:
-            df_combined['Volume'] = pd.to_numeric(df_combined[_qty_col], errors='coerce')
 
         cutoff = datetime.strptime("15:30", "%H:%M").time()
         df_combined['Session'] = df_combined['Entry Time'].apply(
@@ -2287,34 +2271,10 @@ if uploaded_file:
             csv_data = df_final[existing_cols].sort_values('Entry Time', ascending=False).to_csv(index=False)
             st.download_button(label="⬇️ Export CSV", data=csv_data, file_name="trades_filtrate.csv", mime="text/csv")
 
-        # ── Capital pentru curba de balanță / randamente % ──
-        _cap1, _cap2 = st.columns([1, 3])
-        with _cap1:
-            tv_capital = st.number_input("💵 Capital inițial strategie ($):", min_value=100.0, value=25000.0,
-                                         step=1000.0, key="tv_capital")
-        with _cap2:
-            st.markdown("<small style='color:#8b949e;'><br>Folosit pentru curba de balanță, randamentul lunar % și "
-                        "% per trade (TradingView nu exportă balanța). Pune capitalul setat în strategie.</small>",
-                        unsafe_allow_html=True)
-        df_tv = prepare_tv_df(df_final, tv_capital)
-        df_tv_all = prepare_tv_df(df_combined[df_combined['Direction'].isin(selected_dirs)], tv_capital)
-
-        (tab_global, tab_s1, tab_s2, tab_bal, tab_set, tab_next, tab_fund,
-         tab_risk, tab_mc, tab_adv) = st.tabs([
+        tab_global, tab_s1, tab_s2, tab_risk, tab_mc, tab_adv = st.tabs([
             "🌍 Global", "🌅 Sesiunea 1", "🌆 Sesiunea 2",
-            "📈 Balanță & Randament", "🎯 Setup-uri & Ieșiri", "🔮 Next Trade (Win/Loss)", "🏦 Conturi Funded",
             "💰 Risk Management", "🎲 Monte Carlo", "🔬 Analize Avansate"
         ])
-        with tab_bal:
-            render_mt5_balance(df_tv, tv_capital, len(df_final) != len(df_combined))
-        with tab_set:
-            render_mt5_setups(df_tv, None, setup_label="semnal de intrare", volume_label="contracte")
-        with tab_next:
-            render_mt5_next_trade(df_tv, get_streak_probabilities)
-        with tab_fund:
-            st.caption("ℹ️ Simularea folosește toate trade-urile (doar filtrul de direcție se aplică); "
-                       "perioada o alegi mai jos.")
-            render_mt5_funded(df_tv_all, mode='abs')
         with tab_global:
             render_full_analysis(df_final, "Global", [])
         with tab_s1:
