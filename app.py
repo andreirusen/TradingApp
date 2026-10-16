@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import timedelta, datetime
 import io
+from pathlib import Path
 import numpy as np
 
 # 1. ASIGURARE DEPENDENȚE
@@ -128,6 +129,35 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+
+# SELECT REPORT
+st.markdown("## 📂 Fișier pentru analiză")
+sursa_date = st.radio(
+    "Sursa datelor de trading:",
+    ["📊 TradingView (List of trades)", "🤖 MetaTrader 5 (Strategy Tester / History)"],
+    horizontal=True,
+    key="sursa_date",
+)
+uploaded_file = st.file_uploader(
+    "Încarcă un raport Excel pentru a înlocui temporar fișierul prestabilit (.xlsx)",
+    type=["xlsx"],
+    key="shared_trading_report_uploader",
+)
+DEFAULT_REPORTS = {
+    "📊": Path(__file__).resolve().parent / "ORB_-_MES_IC_USTEC.xlsx",
+    "🤖": Path(__file__).resolve().parent / "ReportTester.xlsx",
+}
+if uploaded_file is None:
+    _default_path = DEFAULT_REPORTS["🤖" if sursa_date.startswith("🤖") else "📊"]
+    if _default_path.is_file():
+        uploaded_file = io.BytesIO(_default_path.read_bytes())
+        st.caption(f"Se folosește fișierul prestabilit: {_default_path.name}. Pentru a-l actualiza, înlocuiește fișierul din folderul proiectului.")
+    else:
+        st.info(f"Nu există încă fișierul prestabilit **{_default_path.name}** în folderul proiectului. Încarcă un raport mai sus sau adaugă fișierul în folderul TradingApp.")
+else:
+    st.caption(f"Se folosește fișierul încărcat manual: {uploaded_file.name}. Fișierul prestabilit nu este modificat.")
+
+st.markdown("---")
 
 # --- FUNCȚIE CALCUL PROBABILITĂȚI ȘIRURI ---
 def get_streak_probabilities(df):
@@ -2142,25 +2172,19 @@ else:
 # SECȚIUNEA ORIGINALĂ — ÎNCĂRCARE FIȘIER TRADING
 # ══════════════════════════════════════════════════════════════
 st.markdown("---")
-sursa_date = st.radio(
-    "📂 Sursa datelor de trading:",
-    ["📊 TradingView (List of trades)", "🤖 MetaTrader 5 (Strategy Tester / History)"],
-    horizontal=True,
-    key="sursa_date",
-)
-
 if sursa_date.startswith("🤖"):
-    # ── ANALIZĂ SEPARATĂ STRICT PENTRU MT5 ──
+    # ── ANALIZĂ SEPARATĂ STRICT PENTRU MT5; folosește selectorul comun de sus ──
     render_mt5_page(
         render_full_analysis, render_risk_management, render_monte_carlo,
         render_advanced_analysis, generate_full_pdf_report,
         get_streak_probabilities=get_streak_probabilities,
+        uploaded_report=uploaded_file, external_upload=True,
     )
     st.stop()
 
-uploaded_file = st.file_uploader("Încarcă fișierul .XLSX", type=["xlsx"])
-
-if uploaded_file:
+if uploaded_file is None:
+    st.info("Încarcă un fișier TradingView mai sus sau adaugă ORB_-_MES_IC_USTEC.xlsx în folderul TradingApp.")
+else:
     try:
         # ── DETECTARE AUTOMATĂ FORMAT FIȘIER ──
         _xl = pd.ExcelFile(uploaded_file, engine='openpyxl')
