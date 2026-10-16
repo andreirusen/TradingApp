@@ -2173,12 +2173,21 @@ else:
 # ══════════════════════════════════════════════════════════════
 st.markdown("---")
 if sursa_date.startswith("🤖"):
-    # ── ANALIZĂ SEPARATĂ STRICT PENTRU MT5; folosește selectorul comun de sus ──
-    render_mt5_page(
-        render_full_analysis, render_risk_management, render_monte_carlo,
-        render_advanced_analysis, generate_full_pdf_report,
-        get_streak_probabilities=get_streak_probabilities,
-    )
+    # Refolosim fișierul selectat sus și în pagina MT5.
+    _original_file_uploader = st.file_uploader
+    def _shared_mt5_uploader(label, *args, **kwargs):
+        if kwargs.get("key") == "mt5_uploader":
+            return uploaded_file
+        return _original_file_uploader(label, *args, **kwargs)
+    st.file_uploader = _shared_mt5_uploader
+    try:
+        render_mt5_page(
+            render_full_analysis, render_risk_management, render_monte_carlo,
+            render_advanced_analysis, generate_full_pdf_report,
+            get_streak_probabilities=get_streak_probabilities,
+        )
+    finally:
+        st.file_uploader = _original_file_uploader
     st.stop()
 
 if uploaded_file is None:
