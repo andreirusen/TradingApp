@@ -144,8 +144,8 @@ uploaded_file = st.file_uploader(
     key="shared_trading_report_uploader",
 )
 DEFAULT_REPORTS = {
-    "📊": Path(__file__).resolve().parent / "ORB_-_MES_IC_USTEC.xlsx",
-    "🤖": Path(__file__).resolve().parent / "ReportTester.xlsx",
+    "📊": Path(__file__).resolve().parent / "tradinview_data.xlsx",
+    "🤖": Path(__file__).resolve().parent / "mt5_data.xlsx",
 }
 if uploaded_file is None:
     _default_path = DEFAULT_REPORTS["🤖" if sursa_date.startswith("🤖") else "📊"]
@@ -2182,7 +2182,7 @@ if sursa_date.startswith("🤖"):
     st.stop()
 
 if uploaded_file is None:
-    st.info("Încarcă un fișier TradingView mai sus sau adaugă ORB_-_MES_IC_USTEC.xlsx în folderul TradingApp.")
+    st.info("Încarcă un fișier TradingView mai sus sau adaugă tradinview_data.xlsx în folderul TradingApp.")
 else:
     try:
         # ── DETECTARE AUTOMATĂ FORMAT FIȘIER ──
