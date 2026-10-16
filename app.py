@@ -2178,7 +2178,6 @@ if sursa_date.startswith("🤖"):
         render_full_analysis, render_risk_management, render_monte_carlo,
         render_advanced_analysis, generate_full_pdf_report,
         get_streak_probabilities=get_streak_probabilities,
-        uploaded_report=uploaded_file, external_upload=True,
     )
     st.stop()
 
